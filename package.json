@@ -1,0 +1,21 @@
+{
+  "name": "martini-cell-frontend-only",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "5.1.4",
+    "bootstrap": "5.3.3",
+    "bootstrap-icons": "1.11.3",
+    "vue": "3.5.12",
+    "vue-router": "4.4.5"
+  },
+  "devDependencies": {
+    "vite": "5.4.8"
+  }
+}
