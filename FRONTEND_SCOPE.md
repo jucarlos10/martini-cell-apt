@@ -1,4 +1,4 @@
-# Alcance de la entrega frontend
+# Alcance de la previsualizacion de frontend
 
 ## Qué valida esta versión
 
@@ -12,14 +12,6 @@
 8. Consulta pública sin datos personales.
 9. Diseño responsive básico.
 
-## Qué no debe interpretarse como implementado
+## Qué no se encuentra implementado
 
 Las acciones que parecen guardar, crear o actualizar información son interacciones locales del navegador. No demuestran persistencia, autenticación segura, auditoría real, reglas de negocio en servidor ni integración con una base de datos.
-
-## Uso sugerido para el avance semanal
-
-- Ejecutar el frontend.
-- Navegar el flujo `Login → Panel → Órdenes → Nueva orden → Detalle`.
-- Mostrar la consulta pública en vista móvil.
-- Registrar observaciones del docente/contraparte.
-- Convertir esas observaciones en ajustes de prototipo o historias/tareas Kanban antes de comenzar la integración backend.
