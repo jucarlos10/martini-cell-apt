@@ -1,0 +1,19 @@
+﻿# Frontend / Node
+node_modules/
+.vite/
+dist/
+
+# Environment files
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Editors / OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local SQLite
+db.sqlite3
