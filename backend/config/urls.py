@@ -25,4 +25,5 @@ urlpatterns = [
     path("api/auth/", include("accounts.urls")),
     path("api/users/", UserListCreateView.as_view(), name="user-list-create"),
     path("api/users/<int:pk>/", UserDetailView.as_view(), name="user-detail"),
+    path("api/clients/", include("customers.urls")),
 ]
