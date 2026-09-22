@@ -24,12 +24,16 @@ class ClientListCreateView(ListCreateAPIView):
 
         normalized_rut = normalize_rut(search)
 
-        return queryset.filter(
-            Q(rut__icontains=normalized_rut)
-            | Q(name__icontains=search)
+        filters = (
+            Q(name__icontains=search)
             | Q(phone__icontains=search)
             | Q(email__icontains=search)
         )
+
+        if normalized_rut:
+            filters |= Q(rut__icontains=normalized_rut)
+
+        return queryset.filter(filters)
 
     def perform_create(self, serializer):
         serializer.save(
