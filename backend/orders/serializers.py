@@ -74,3 +74,23 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
             )
 
         return attrs
+
+
+class ServiceOrderHistorySerializer(serializers.ModelSerializer):
+    order_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ServiceOrder
+        fields = (
+            "id",
+            "tracking_code",
+            "received_at",
+            "reported_issue",
+            "initial_observations",
+            "order_url",
+        )
+
+        read_only_fields = fields
+
+    def get_order_url(self, obj):
+        return f"/api/orders/{obj.id}/"
