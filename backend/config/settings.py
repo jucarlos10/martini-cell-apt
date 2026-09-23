@@ -141,6 +141,7 @@ MAILERS = {
 }
 
 AUTH_USER_MODEL = "accounts.User"
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -151,3 +152,13 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
+
+
+# Evidencias fotográficas privadas
+MEDIA_ROOT = BASE_DIR / "private_media"
+
+# Tamaño objetivo de cada fotografía: 10 MB
+EVIDENCE_MAX_FILE_SIZE = 10 * 1024 * 1024
+
+# Máximo absoluto permitido antes de procesarla: 20 MB
+EVIDENCE_MAX_UPLOAD_SIZE = 20 * 1024 * 1024

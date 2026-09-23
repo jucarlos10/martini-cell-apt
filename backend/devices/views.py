@@ -62,6 +62,7 @@ class EquipmentHistoryListView(ListAPIView):
                 "client",
                 "equipment",
                 "created_by",
+                "technical_report__technician",
             )
             .order_by("received_at")
         )
