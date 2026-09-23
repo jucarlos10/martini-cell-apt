@@ -1,7 +1,9 @@
 import uuid
+from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import FileExtensionValidator
 from django.db import models
 
 from customers.models import Client
@@ -80,4 +82,74 @@ class ServiceOrder(models.Model):
             f"{self.tracking_code} - "
             f"{self.client.name} - "
             f"{self.equipment.brand} {self.equipment.model}"
+        )
+
+
+def order_evidence_upload_path(instance, filename):
+    extension = Path(filename).suffix.lower()
+
+    return (
+        f"order_evidence/"
+        f"{instance.order_id}/"
+        f"{uuid.uuid4().hex}{extension}"
+    )
+
+
+class OrderEvidence(models.Model):
+    class Stage(models.TextChoices):
+        RECEPCION = "RECEPCION", "Recepción"
+        DIAGNOSTICO = "DIAGNOSTICO", "Diagnóstico"
+        REPARACION = "REPARACION", "Reparación"
+        ENTREGA = "ENTREGA", "Entrega"
+        OTRO = "OTRO", "Otro"
+
+    order = models.ForeignKey(
+        ServiceOrder,
+        on_delete=models.CASCADE,
+        related_name="evidence",
+    )
+
+    stage = models.CharField(
+        max_length=20,
+        choices=Stage.choices,
+    )
+
+    image = models.ImageField(
+        upload_to=order_evidence_upload_path,
+        validators=[
+            FileExtensionValidator(
+                allowed_extensions=[
+                    "jpg",
+                    "jpeg",
+                    "png",
+                    "webp",
+                ]
+            )
+        ],
+    )
+
+    description = models.CharField(
+        max_length=250,
+        blank=True,
+    )
+
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="order_evidence_uploaded",
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return (
+            f"Evidencia {self.id} - "
+            f"{self.order.tracking_code} - "
+            f"{self.stage}"
         )
