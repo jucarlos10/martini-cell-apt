@@ -3,6 +3,8 @@ from django.urls import path
 from .views import (
     OrderEvidenceDownloadView,
     OrderEvidenceListCreateView,
+    OrderTechnicalReportHistoryView,
+    OrderTechnicalReportView,
     ServiceOrderDetailView,
     ServiceOrderListCreateView,
 )
@@ -28,5 +30,15 @@ urlpatterns = [
         "<int:pk>/evidence/<int:evidence_id>/download/",
         OrderEvidenceDownloadView.as_view(),
         name="order-evidence-download",
+    ),
+    path(
+        "<int:pk>/technical-report/",
+        OrderTechnicalReportView.as_view(),
+        name="order-technical-report",
+    ),
+    path(
+        "<int:pk>/technical-report/history/",
+        OrderTechnicalReportHistoryView.as_view(),
+        name="order-technical-report-history",
     ),
 ]

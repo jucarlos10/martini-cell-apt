@@ -153,3 +153,154 @@ class OrderEvidence(models.Model):
             f"{self.order.tracking_code} - "
             f"{self.stage}"
         )
+
+
+class OrderTechnicalReport(models.Model):
+    class Result(models.TextChoices):
+        REPARADO = "REPARADO", "Reparado"
+        PARCIAL = "PARCIAL", "Reparado parcialmente"
+        NO_REPARABLE = "NO_REPARABLE", "No reparable"
+        SIN_FALLA = "SIN_FALLA", "Sin falla detectada"
+
+    order = models.OneToOneField(
+        ServiceOrder,
+        on_delete=models.CASCADE,
+        related_name="technical_report",
+    )
+
+    diagnosis = models.TextField()
+
+    repair_actions = models.TextField()
+
+    repair_observations = models.TextField(
+        blank=True,
+    )
+
+    parts_description = models.TextField(
+        blank=True,
+    )
+
+    result = models.CharField(
+        max_length=20,
+        choices=Result.choices,
+    )
+
+    technician = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="technical_reports",
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="technical_reports_created",
+    )
+
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="technical_reports_updated",
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    def clean(self):
+        super().clean()
+
+        if self.technician_id:
+            if self.technician.role != "TECH":
+                raise ValidationError(
+                    {
+                        "technician": (
+                            "El responsable debe tener rol de técnico."
+                        )
+                    }
+                )
+
+            if not self.technician.is_active:
+                raise ValidationError(
+                    {
+                        "technician": (
+                            "El técnico seleccionado no está activo."
+                        )
+                    }
+                )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"Informe técnico - "
+            f"{self.order.tracking_code}"
+        )
+
+
+class OrderTechnicalReportHistory(models.Model):
+    report = models.ForeignKey(
+        OrderTechnicalReport,
+        on_delete=models.CASCADE,
+        related_name="history",
+    )
+
+    revision = models.PositiveIntegerField()
+
+    diagnosis = models.TextField()
+
+    repair_actions = models.TextField()
+
+    repair_observations = models.TextField(
+        blank=True,
+    )
+
+    parts_description = models.TextField(
+        blank=True,
+    )
+
+    result = models.CharField(
+        max_length=20,
+        choices=OrderTechnicalReport.Result.choices,
+    )
+
+    technician = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="technical_report_history",
+    )
+
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="technical_report_changes",
+    )
+
+    changed_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering = ["revision"]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=["report", "revision"],
+                name="unique_technical_report_revision",
+            )
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.report.order.tracking_code} - "
+            f"revisión {self.revision}"
+        )
