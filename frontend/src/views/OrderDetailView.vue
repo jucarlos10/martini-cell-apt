@@ -10,11 +10,22 @@ import { authenticatedFetch, getCurrentUser } from '../services/auth'
 const route = useRoute()
 const currentUser = getCurrentUser()
 const canEditReport = ['ADMIN', 'TECH'].includes(currentUser?.role)
+const canChangeStatus = ['ADMIN', 'TECH'].includes(currentUser?.role)
 
 const order = ref(null)
 const history = ref([])
 const technicalReport = ref(null)
 const times = ref(null)
+
+// HU-10: cambios de estado autorizados por la API y trazabilidad real.
+const statusInfo = ref(null)
+const statusLoading = ref(false)
+const statusSaving = ref(false)
+const statusError = ref('')
+const statusFormError = ref('')
+const statusSuccess = ref('')
+const nextStatus = ref('')
+const statusNote = ref('')
 
 // HU-09: informe técnico real y sus revisiones.
 const technicalReportHistory = ref([])
@@ -179,6 +190,7 @@ async function loadEvidences() {
 function selectTab(key) {
   tab.value = key
   if (key === 'evidencias' && order.value) loadEvidences()
+  if (key === 'linea' && order.value) refreshOrderTracking()
 }
 
 function selectEvidenceFile(event) {
@@ -434,6 +446,114 @@ async function saveTechnicalReport() {
 
 let loadSequence = 0
 
+// HU-10 y HU-11: consultar de nuevo orden, transiciones, historial y tiempos
+// para que el cambio se refleje tanto en Resumen como en Línea de tiempo.
+async function refreshOrderTracking() {
+  if (!order.value) return
+  const orderId = order.value.id
+  const sequence = loadSequence
+  statusLoading.value = true
+  statusError.value = ''
+
+  try {
+    const [orderResult, statusResult, historyResult, timesResult] = await Promise.allSettled([
+      getResponse(`/api/orders/${orderId}/`),
+      getResponse(`/api/orders/${orderId}/status/`),
+      getResponse(`/api/orders/${orderId}/status/history/`),
+      getResponse(`/api/orders/${orderId}/times/`),
+    ])
+    if (sequence !== loadSequence) return
+
+    if (orderResult.status === 'fulfilled' && orderResult.value.ok) {
+      order.value = orderResult.value.data
+    } else {
+      statusError.value = 'No fue posible actualizar los datos generales de la orden.'
+    }
+
+    if (statusResult.status === 'fulfilled' && statusResult.value.ok) {
+      statusInfo.value = statusResult.value.data
+      order.value = {
+        ...order.value,
+        status: statusInfo.value.status,
+        status_display: statusInfo.value.status_display,
+      }
+      nextStatus.value = ''
+    } else {
+      statusError.value = 'No fue posible consultar el estado y las transiciones permitidas.'
+    }
+
+    if (historyResult.status === 'fulfilled' && historyResult.value.ok &&
+        Array.isArray(historyResult.value.data)) {
+      history.value = historyResult.value.data
+      historyError.value = ''
+    } else {
+      historyError.value = 'No fue posible actualizar la línea de tiempo.'
+    }
+
+    if (timesResult.status === 'fulfilled' && timesResult.value.ok) {
+      times.value = timesResult.value.data
+      timesError.value = ''
+    } else {
+      times.value = null
+      timesError.value = timesResult.status === 'fulfilled' && timesResult.value.status === 409
+        ? (timesResult.value.data?.detail || 'El historial no permite calcular los tiempos.')
+        : 'No fue posible actualizar los tiempos del servicio.'
+    }
+  } catch (err) {
+    if (sequence === loadSequence) {
+      statusError.value = err?.message || 'No fue posible actualizar el seguimiento.'
+    }
+  } finally {
+    if (sequence === loadSequence) statusLoading.value = false
+  }
+}
+
+async function changeOrderStatus() {
+  if (!order.value || !canChangeStatus || statusSaving.value || statusLoading.value) return
+  statusFormError.value = ''
+  statusSuccess.value = ''
+  const selected = statusInfo.value?.allowed_transitions?.find(
+    (item) => item.status === nextStatus.value
+  )
+  if (!selected) {
+    statusFormError.value = 'Selecciona una transición permitida.'
+    return
+  }
+
+  const orderId = order.value.id
+  const sequence = loadSequence
+  statusSaving.value = true
+  try {
+    const response = await authenticatedFetch(`/api/orders/${orderId}/status/`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: selected.status, note: statusNote.value.trim() }),
+    })
+    const data = await response.json().catch(() => null)
+    if (sequence !== loadSequence) return
+    if (!response.ok) {
+      throw new Error(evidenceApiError(data, 'No fue posible cambiar el estado de la orden.'))
+    }
+
+    statusInfo.value = data
+    order.value = {
+      ...order.value,
+      status: data.status,
+      status_display: data.status_display,
+    }
+    statusNote.value = ''
+    nextStatus.value = ''
+    statusSuccess.value = `Estado actualizado a ${data.status_display}. El cambio quedó registrado en el historial.`
+    await refreshOrderTracking()
+  } catch (err) {
+    if (sequence === loadSequence) {
+      statusFormError.value = err?.message || 'Error al actualizar el estado.'
+    }
+  } finally {
+    if (sequence === loadSequence) statusSaving.value = false
+  }
+}
+
 async function loadOrder() {
   const sequence = ++loadSequence
   const orderId = String(route.params.id ?? '')
@@ -443,6 +563,14 @@ async function loadOrder() {
   historyError.value = ''
   reportError.value = ''
   timesError.value = ''
+  statusInfo.value = null
+  statusLoading.value = false
+  statusSaving.value = false
+  statusError.value = ''
+  statusFormError.value = ''
+  statusSuccess.value = ''
+  nextStatus.value = ''
+  statusNote.value = ''
   technicalReportHistory.value = []
   reportHistoryLoading.value = false
   reportHistoryError.value = ''
@@ -482,10 +610,11 @@ async function loadOrder() {
 
     // Estas consultas son de lectura. Si alguna falla, conservamos
     // el detalle principal y mostramos el problema en su sección.
-    const [historyResult, reportResult, timesResult] = await Promise.allSettled([
+    const [historyResult, reportResult, timesResult, statusResult] = await Promise.allSettled([
       getResponse(`/api/orders/${orderId}/status/history/`),
       getResponse(`/api/orders/${orderId}/technical-report/`),
       getResponse(`/api/orders/${orderId}/times/`),
+      getResponse(`/api/orders/${orderId}/status/`),
     ])
 
     if (sequence !== loadSequence) return
@@ -510,6 +639,17 @@ async function loadOrder() {
       reportError.value = 'No fue posible consultar el informe técnico.'
     }
     resetReportForm()
+
+    if (statusResult.status === 'fulfilled' && statusResult.value.ok) {
+      statusInfo.value = statusResult.value.data
+      order.value = {
+        ...order.value,
+        status: statusInfo.value.status,
+        status_display: statusInfo.value.status_display,
+      }
+    } else {
+      statusError.value = 'No fue posible consultar las transiciones permitidas.'
+    }
 
     // Las revisiones y los técnicos se consultan separadamente.
     // Fallar en una de estas consultas no oculta el detalle principal.
@@ -899,6 +1039,9 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                 class="timeline-item"
               >
                 <div class="fw-semibold">
+                  <template v-if="event.from_status">
+                    {{ event.from_status_display || event.from_status }} →
+                  </template>
                   {{ event.to_status_display || event.to_status }}
                 </div>
                 <div class="small text-muted">
@@ -913,15 +1056,54 @@ watch(() => route.params.id, loadOrder, { immediate: true })
 
         <div class="col-lg-5">
           <div class="mc-card p-4">
-            <h5>Estado de la orden</h5>
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+              <h5 class="mb-0">Estado de la orden</h5>
+              <button type="button" class="btn btn-sm btn-outline-secondary"
+                :disabled="statusLoading || statusSaving" @click="refreshOrderTracking">
+                {{ statusLoading ? 'Actualizando...' : 'Actualizar' }}
+              </button>
+            </div>
             <StatusBadge
               :status="order.status"
               :label="order.status_display || order.status"
             />
-            <p class="small text-muted mt-3 mb-0">
-              Esta línea de tiempo utiliza el historial real de Django.
-              La actualización de estados se conectará al integrar HU-10;
-              no se guardarán cambios ficticios en el navegador.
+            <div v-if="statusError" class="alert alert-warning small mt-3" role="alert">
+              {{ statusError }}
+            </div>
+            <div v-if="statusSuccess" class="alert alert-success small mt-3" role="status">
+              {{ statusSuccess }}
+            </div>
+            <div v-if="statusFormError" class="alert alert-danger small mt-3" role="alert">
+              {{ statusFormError }}
+            </div>
+            <form v-if="canChangeStatus && statusInfo?.allowed_transitions?.length"
+              class="mt-3" @submit.prevent="changeOrderStatus">
+              <label class="form-label" for="next-order-status">Siguiente estado permitido</label>
+              <select id="next-order-status" v-model="nextStatus" class="form-select mb-3"
+                :disabled="statusSaving || statusLoading" required>
+                <option value="" disabled>Seleccionar estado...</option>
+                <option v-for="item in statusInfo.allowed_transitions" :key="item.status"
+                  :value="item.status">{{ item.status_display }}</option>
+              </select>
+              <label class="form-label" for="order-status-note">Observación del cambio (opcional)</label>
+              <textarea id="order-status-note" v-model="statusNote" class="form-control mb-3"
+                rows="3" maxlength="1000" :disabled="statusSaving || statusLoading"
+                placeholder="Ej.: Se inicia el diagnóstico del equipo."></textarea>
+              <button type="submit" class="btn btn-primary"
+                :disabled="statusSaving || statusLoading || !nextStatus">
+                <span v-if="statusSaving" class="spinner-border spinner-border-sm me-2"></span>
+                {{ statusSaving ? 'Guardando...' : 'Guardar cambio de estado' }}
+              </button>
+              <p class="small text-muted mt-2 mb-0">
+                Django valida la transición y registra estado anterior, nuevo estado, fecha y usuario.
+              </p>
+            </form>
+            <p v-else-if="canChangeStatus && statusInfo && !statusInfo.allowed_transitions?.length"
+              class="small text-muted mt-3 mb-0">
+              Esta orden no tiene transiciones disponibles desde su estado actual.
+            </p>
+            <p v-else-if="!canChangeStatus" class="small text-muted mt-3 mb-0">
+              Tu perfil puede consultar el estado y el historial, pero no modificarlos.
             </p>
           </div>
         </div>
