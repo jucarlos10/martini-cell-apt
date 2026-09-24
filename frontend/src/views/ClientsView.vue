@@ -1,4 +1,3 @@
-
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 
@@ -23,6 +22,34 @@ const success = ref('')
 const history = ref([])
 const historyLoading = ref(false)
 const historyError = ref('')
+
+// HU-05: equipos reales asociados a cada cliente.
+const equipment = ref([])
+const equipmentLoading = ref(true)
+const equipmentError = ref('')
+const showEquipmentForm = ref(false)
+const savingEquipment = ref(false)
+const equipmentFormError = ref('')
+
+const equipmentTypes = [
+  { value: 'CELULAR', label: 'Celular' },
+  { value: 'NOTEBOOK', label: 'Notebook' },
+  { value: 'PC', label: 'PC' },
+  { value: 'TABLET', label: 'Tablet' },
+  { value: 'OTRO', label: 'Otro' },
+]
+
+const emptyEquipmentForm = () => ({
+  equipment_type: 'CELULAR',
+  brand: '',
+  model: '',
+  imei: '',
+  serial_number: '',
+  color: '',
+  observations: '',
+})
+
+const equipmentForm = ref(emptyEquipmentForm())
 
 let historyRequestId = 0
 
@@ -116,6 +143,16 @@ const selectedClient = computed(() =>
     (client) => client.id === selectedId.value
   ) || null
 )
+
+const selectedEquipment = computed(() =>
+  equipment.value.filter(
+    (item) => Number(item.client) === Number(selectedId.value)
+  )
+)
+
+function equipmentTypeLabel(value) {
+  return equipmentTypes.find((item) => item.value === value)?.label || value
+}
 
 function formatDate(value) {
   if (!value) return 'No disponible'
@@ -257,8 +294,115 @@ async function loadHistory(clientId) {
   }
 }
 
-// Al seleccionar otro cliente, cargar su historial.
+// Cargar el listado de equipos desde la API real.
+async function loadEquipment() {
+  equipmentLoading.value = true
+  equipmentError.value = ''
+
+  try {
+    const response = await authenticatedFetch('/api/devices/')
+
+    if (!response.ok) {
+      throw new Error('No fue posible cargar los equipos.')
+    }
+
+    const data = await response.json()
+    equipment.value = Array.isArray(data) ? data : data.results || []
+
+  } catch (err) {
+    equipment.value = []
+    equipmentError.value = err.message || 'Error al cargar los equipos.'
+
+  } finally {
+    equipmentLoading.value = false
+  }
+}
+
+function openEquipmentForm() {
+  if (!selectedClient.value || !selectedClient.value.is_active) return
+  if (saving.value || savingEquipment.value) return
+
+  equipmentForm.value = emptyEquipmentForm()
+  equipmentFormError.value = ''
+  success.value = ''
+  showEquipmentForm.value = true
+}
+
+function cancelEquipmentForm() {
+  if (savingEquipment.value) return
+
+  showEquipmentForm.value = false
+  equipmentFormError.value = ''
+  equipmentForm.value = emptyEquipmentForm()
+}
+
+async function createEquipment() {
+  if (savingEquipment.value || saving.value) return
+
+  const client = selectedClient.value
+  equipmentFormError.value = ''
+  success.value = ''
+
+  if (!client || !client.is_active) {
+    equipmentFormError.value = 'Selecciona un cliente activo.'
+    return
+  }
+
+  savingEquipment.value = true
+
+  try {
+    const response = await authenticatedFetch('/api/devices/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        client: client.id,
+        equipment_type: equipmentForm.value.equipment_type,
+        brand: equipmentForm.value.brand.trim(),
+        model: equipmentForm.value.model.trim(),
+        imei: equipmentForm.value.imei.trim(),
+        serial_number: equipmentForm.value.serial_number.trim(),
+        color: equipmentForm.value.color.trim(),
+        observations: equipmentForm.value.observations.trim(),
+      }),
+    })
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null)
+      throw new Error(formatApiErrors(data))
+    }
+
+    const created = await response.json()
+
+    // Añadir solo el registro confirmado por Django.
+    equipmentError.value = ''
+    equipmentLoading.value = false
+    equipment.value = [
+      created,
+      ...equipment.value.filter((item) => item.id !== created.id),
+    ]
+
+    showEquipmentForm.value = false
+    equipmentForm.value = emptyEquipmentForm()
+    success.value = `Equipo #${created.id} registrado correctamente.`
+
+  } catch (err) {
+    equipmentFormError.value =
+      err.message || 'No fue posible registrar el equipo.'
+
+  } finally {
+    savingEquipment.value = false
+  }
+}
+
+// Al seleccionar otro cliente, recargar historial y cerrar el formulario
+// anterior para no asociar un equipo a un cliente equivocado.
 watch(selectedId, loadHistory)
+watch(selectedId, () => {
+  showEquipmentForm.value = false
+  equipmentFormError.value = ''
+})
 
 // Abrir formulario para crear.
 function openForm() {
@@ -365,7 +509,10 @@ async function saveClient() {
   }
 }
 
-onMounted(loadClients)
+onMounted(() => {
+  loadClients()
+  loadEquipment()
+})
 </script>
 
 <template>
@@ -380,7 +527,7 @@ onMounted(loadClients)
       <template #actions>
         <button
           class="btn btn-primary"
-          :disabled="saving"
+          :disabled="saving || savingEquipment"
           @click="openForm"
         >
           <i class="bi bi-plus-lg me-1"></i>
@@ -569,6 +716,7 @@ onMounted(loadClients)
               :key="client.id"
               type="button"
               class="list-group-item list-group-item-action"
+              :disabled="saving || savingEquipment"
               :class="{
                 active: selectedId === client.id
               }"
@@ -615,7 +763,7 @@ onMounted(loadClients)
             <div>
               <button
                 class="btn btn-outline-primary btn-sm"
-                :disabled="saving"
+                :disabled="saving || savingEquipment"
                 @click="editClient(selectedClient)"
               >
                 <i class="bi bi-pencil me-1"></i>
@@ -654,10 +802,193 @@ onMounted(loadClients)
 
           <hr>
 
-          <h6>Equipos asociados</h6>
+          <!-- Equipos asociados: HU-05 -->
+          <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+            <h6 class="mb-0">Equipos asociados</h6>
 
-          <div class="text-muted small">
-            Conectaremos los equipos reales en HU-05.
+            <button
+              type="button"
+              class="btn btn-sm btn-outline-primary"
+              :disabled="saving || savingEquipment || !selectedClient.is_active"
+              @click="openEquipmentForm"
+            >
+              <i class="bi bi-plus-lg me-1"></i>
+              Nuevo equipo
+            </button>
+          </div>
+
+          <div
+            v-if="!selectedClient.is_active"
+            class="text-muted small mb-3"
+          >
+            No es posible registrar equipos nuevos en un cliente inactivo.
+          </div>
+
+          <div v-if="equipmentError" class="alert alert-danger" role="alert">
+            {{ equipmentError }}
+            <button
+              type="button"
+              class="btn btn-sm btn-outline-danger ms-2"
+              @click="loadEquipment"
+            >
+              Reintentar
+            </button>
+          </div>
+
+          <div v-if="showEquipmentForm" class="border rounded p-3 mb-3">
+            <h6 class="mb-3">Registrar equipo para {{ selectedClient.name }}</h6>
+
+            <div
+              v-if="equipmentFormError"
+              class="alert alert-danger"
+              role="alert"
+            >
+              {{ equipmentFormError }}
+            </div>
+
+            <form @submit.prevent="createEquipment">
+              <div class="row g-3">
+                <div class="col-md-6">
+                  <label for="equipment-type" class="form-label">Tipo de equipo</label>
+                  <select
+                    id="equipment-type"
+                    v-model="equipmentForm.equipment_type"
+                    class="form-select"
+                    required
+                    :disabled="savingEquipment"
+                  >
+                    <option
+                      v-for="type in equipmentTypes"
+                      :key="type.value"
+                      :value="type.value"
+                    >
+                      {{ type.label }}
+                    </option>
+                  </select>
+                </div>
+
+                <div class="col-md-6">
+                  <label for="equipment-brand" class="form-label">Marca</label>
+                  <input
+                    id="equipment-brand"
+                    v-model="equipmentForm.brand"
+                    class="form-control"
+                    maxlength="100"
+                    required
+                    :disabled="savingEquipment"
+                  >
+                </div>
+
+                <div class="col-md-6">
+                  <label for="equipment-model" class="form-label">Modelo</label>
+                  <input
+                    id="equipment-model"
+                    v-model="equipmentForm.model"
+                    class="form-control"
+                    maxlength="100"
+                    required
+                    :disabled="savingEquipment"
+                  >
+                </div>
+
+                <div class="col-md-6">
+                  <label for="equipment-color" class="form-label">Color (opcional)</label>
+                  <input
+                    id="equipment-color"
+                    v-model="equipmentForm.color"
+                    class="form-control"
+                    maxlength="50"
+                    :disabled="savingEquipment"
+                  >
+                </div>
+
+                <div class="col-md-6">
+                  <label for="equipment-imei" class="form-label">IMEI (opcional)</label>
+                  <input
+                    id="equipment-imei"
+                    v-model="equipmentForm.imei"
+                    class="form-control"
+                    maxlength="30"
+                    autocomplete="off"
+                    :disabled="savingEquipment"
+                  >
+                </div>
+
+                <div class="col-md-6">
+                  <label for="equipment-serial" class="form-label">N.º de serie (opcional)</label>
+                  <input
+                    id="equipment-serial"
+                    v-model="equipmentForm.serial_number"
+                    class="form-control"
+                    maxlength="100"
+                    autocomplete="off"
+                    :disabled="savingEquipment"
+                  >
+                </div>
+
+                <div class="col-12">
+                  <label for="equipment-observations" class="form-label">Observaciones (opcional)</label>
+                  <textarea
+                    id="equipment-observations"
+                    v-model="equipmentForm.observations"
+                    class="form-control"
+                    rows="2"
+                    :disabled="savingEquipment"
+                  ></textarea>
+                </div>
+              </div>
+
+              <div class="d-flex flex-wrap gap-2 mt-3">
+                <button
+                  type="submit"
+                  class="btn btn-primary"
+                  :disabled="savingEquipment"
+                >
+                  {{ savingEquipment ? 'Guardando...' : 'Guardar equipo' }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-outline-secondary"
+                  :disabled="savingEquipment"
+                  @click="cancelEquipmentForm"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <div v-if="equipmentLoading" class="text-muted small">
+            Cargando equipos...
+          </div>
+          <div
+            v-else-if="!equipmentError && selectedEquipment.length === 0"
+            class="text-muted small"
+          >
+            Este cliente aún no tiene equipos registrados.
+          </div>
+          <div v-else-if="!equipmentError" class="d-flex flex-column gap-2">
+            <div
+              v-for="item in selectedEquipment"
+              :key="item.id"
+              class="border rounded p-3"
+            >
+              <div class="d-flex justify-content-between gap-2">
+                <strong>{{ item.brand }} {{ item.model }}</strong>
+                <span class="badge text-bg-secondary">Equipo #{{ item.id }}</span>
+              </div>
+              <div class="small text-muted mt-1">
+                {{ equipmentTypeLabel(item.equipment_type) }}
+                <span v-if="item.color"> · {{ item.color }}</span>
+              </div>
+              <div v-if="item.imei" class="small mt-1">IMEI: {{ item.imei }}</div>
+              <div v-if="item.serial_number" class="small mt-1">
+                N.º de serie: {{ item.serial_number }}
+              </div>
+              <div v-if="item.observations" class="small mt-1">
+                Observaciones: {{ item.observations }}
+              </div>
+            </div>
           </div>
 
           <hr>
