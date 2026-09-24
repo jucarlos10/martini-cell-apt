@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 import AdminLayout from '../layouts/AdminLayout.vue'
@@ -21,13 +21,40 @@ const historyError = ref('')
 const reportError = ref('')
 const timesError = ref('')
 
+// HU-08: evidencias fotográficas asociadas a la orden real.
+const evidences = ref([])
+const evidenceLoading = ref(false)
+const evidenceError = ref('')
+const uploadingEvidence = ref(false)
+const uploadError = ref('')
+const uploadSuccess = ref('')
+const evidenceStage = ref('RECEPCION')
+const evidenceDescription = ref('')
+const evidenceFile = ref(null)
+const evidenceInput = ref(null)
+const imageUrls = ref({})
+const imageLoading = ref({})
+const imageErrors = ref({})
+
+const evidenceStages = [
+  { value: 'RECEPCION', label: 'Recepción' },
+  { value: 'DIAGNOSTICO', label: 'Diagnóstico' },
+  { value: 'REPARACION', label: 'Reparación' },
+  { value: 'ENTREGA', label: 'Entrega' },
+  { value: 'OTRO', label: 'Otro' },
+]
+
+const maxEvidenceSize = 20 * 1024 * 1024
+let evidenceRequestId = 0
+
+
 // Conservamos la estructura de pestañas del prototipo.
 // Las secciones pendientes se habilitarán al integrar sus historias.
 const tabs = [
   { key: 'resumen', label: 'Resumen', enabled: true },
   { key: 'diagnostico', label: 'Diagnóstico', enabled: true },
   { key: 'linea', label: 'Línea de tiempo', enabled: true },
-  { key: 'evidencias', label: 'Evidencias', enabled: false },
+  { key: 'evidencias', label: 'Evidencias', enabled: true },
   { key: 'repuestos', label: 'Repuestos y costos', enabled: false },
   { key: 'garantia', label: 'Garantía', enabled: false },
   { key: 'viabilidad', label: 'Índice de viabilidad', enabled: false },
@@ -56,6 +83,178 @@ async function getResponse(url) {
   }
 }
 
+
+
+function stageLabel(value) {
+  return evidenceStages.find((item) => item.value === value)?.label || value
+}
+
+function releaseImageUrls() {
+  Object.values(imageUrls.value).forEach((url) => URL.revokeObjectURL(url))
+  imageUrls.value = {}
+  imageLoading.value = {}
+  imageErrors.value = {}
+}
+
+function resetEvidence() {
+  ++evidenceRequestId
+  releaseImageUrls()
+  evidences.value = []
+  evidenceLoading.value = false
+  evidenceError.value = ''
+  uploadingEvidence.value = false
+  uploadError.value = ''
+  uploadSuccess.value = ''
+  evidenceStage.value = 'RECEPCION'
+  evidenceDescription.value = ''
+  evidenceFile.value = null
+  if (evidenceInput.value) evidenceInput.value.value = ''
+}
+
+function evidenceApiError(data, fallback) {
+  if (typeof data?.detail === 'string') return data.detail
+  if (!data || typeof data !== 'object') return fallback
+  return Object.entries(data).map(([field, messages]) => {
+    const message = Array.isArray(messages) ? messages.join(' ') : String(messages)
+    return `${field}: ${message}`
+  }).join(' ') || fallback
+}
+
+async function loadEvidences() {
+  if (!order.value) return
+  const orderId = order.value.id
+  const requestId = ++evidenceRequestId
+  evidenceLoading.value = true
+  evidenceError.value = ''
+  releaseImageUrls()
+
+  try {
+    const response = await authenticatedFetch(`/api/orders/${orderId}/evidence/`)
+    const data = await response.json().catch(() => null)
+    if (requestId !== evidenceRequestId) return
+    if (!response.ok) {
+      throw new Error(evidenceApiError(data, 'No fue posible cargar las evidencias.'))
+    }
+    evidences.value = Array.isArray(data) ? data : (data?.results || [])
+  } catch (err) {
+    if (requestId === evidenceRequestId) {
+      evidences.value = []
+      evidenceError.value = err?.message || 'Error al cargar las evidencias.'
+    }
+  } finally {
+    if (requestId === evidenceRequestId) evidenceLoading.value = false
+  }
+}
+
+function selectTab(key) {
+  tab.value = key
+  if (key === 'evidencias' && order.value) loadEvidences()
+}
+
+function selectEvidenceFile(event) {
+  evidenceFile.value = event.target.files?.[0] || null
+  uploadError.value = ''
+  uploadSuccess.value = ''
+}
+
+async function uploadEvidence() {
+  if (uploadingEvidence.value || !order.value) return
+  uploadError.value = ''
+  uploadSuccess.value = ''
+  const file = evidenceFile.value
+
+  if (!file) {
+    uploadError.value = 'Selecciona una fotografía.'
+    return
+  }
+  if (!/\.(jpe?g|png|webp)$/i.test(file.name)) {
+    uploadError.value = 'Formato no permitido. Usa JPG, JPEG, PNG o WEBP.'
+    return
+  }
+  if (file.size > maxEvidenceSize) {
+    uploadError.value = 'La fotografía no puede superar los 20 MB.'
+    return
+  }
+
+  const orderId = order.value.id
+  const requestId = evidenceRequestId
+  const formData = new FormData()
+  formData.append('stage', evidenceStage.value)
+  formData.append('description', evidenceDescription.value.trim())
+  formData.append('image', file)
+  uploadingEvidence.value = true
+
+  try {
+    // No establecer Content-Type: el navegador agrega el boundary de multipart/form-data.
+    const response = await authenticatedFetch(`/api/orders/${orderId}/evidence/`, {
+      method: 'POST',
+      body: formData,
+    })
+    const data = await response.json().catch(() => null)
+    if (!response.ok) {
+      throw new Error(evidenceApiError(data, 'No fue posible adjuntar la fotografía.'))
+    }
+    if (requestId !== evidenceRequestId) return
+    uploadSuccess.value = 'Evidencia registrada correctamente en Django.'
+    evidenceFile.value = null
+    evidenceDescription.value = ''
+    evidenceStage.value = 'RECEPCION'
+    if (evidenceInput.value) evidenceInput.value.value = ''
+    uploadingEvidence.value = false
+    await loadEvidences()
+  } catch (err) {
+    if (requestId === evidenceRequestId) {
+      uploadError.value = err?.message || 'Error al subir la fotografía.'
+    }
+  } finally {
+    if (order.value?.id === orderId) uploadingEvidence.value = false
+  }
+}
+
+async function toggleEvidenceImage(item) {
+  const id = item.id
+  if (imageUrls.value[id]) {
+    URL.revokeObjectURL(imageUrls.value[id])
+    const urls = { ...imageUrls.value }
+    delete urls[id]
+    imageUrls.value = urls
+    return
+  }
+  if (imageLoading.value[id] || !order.value) return
+
+  const orderId = order.value.id
+  const requestId = evidenceRequestId
+  imageLoading.value = { ...imageLoading.value, [id]: true }
+  imageErrors.value = { ...imageErrors.value, [id]: '' }
+
+  try {
+    // La URL privada requiere Authorization; un <img src="/api/..."> no envía el JWT.
+    const response = await authenticatedFetch(
+      `/api/orders/${orderId}/evidence/${id}/download/`
+    )
+    if (!response.ok) throw new Error('No fue posible recuperar la fotografía.')
+    const blob = await response.blob()
+    if (!blob.type.startsWith('image/')) {
+      throw new Error('El servidor no devolvió una imagen válida.')
+    }
+    if (requestId !== evidenceRequestId) return
+    imageUrls.value = { ...imageUrls.value, [id]: URL.createObjectURL(blob) }
+  } catch (err) {
+    if (requestId === evidenceRequestId) {
+      imageErrors.value = { ...imageErrors.value, [id]: err?.message || 'Error al abrir la imagen.' }
+    }
+  } finally {
+    if (requestId === evidenceRequestId) {
+      imageLoading.value = { ...imageLoading.value, [id]: false }
+    }
+  }
+}
+
+onBeforeUnmount(() => {
+  ++evidenceRequestId
+  releaseImageUrls()
+})
+
 let loadSequence = 0
 
 async function loadOrder() {
@@ -67,6 +266,7 @@ async function loadOrder() {
   historyError.value = ''
   reportError.value = ''
   timesError.value = ''
+  resetEvidence()
 
   order.value = null
   history.value = []
@@ -194,7 +394,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
           :class="{ active: tab === item.key }"
           :disabled="!item.enabled"
           :title="item.enabled ? item.label : `${item.label}: integración pendiente`"
-          @click="tab = item.key"
+          @click="selectTab(item.key)"
         >
           {{ item.label }}
           <span v-if="!item.enabled" class="small">(pendiente)</span>
@@ -362,6 +562,140 @@ watch(() => route.params.id, loadOrder, { immediate: true })
               La actualización de estados se conectará al integrar HU-10;
               no se guardarán cambios ficticios en el navegador.
             </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- HU-08: evidencias fotográficas privadas de esta orden -->
+      <section v-if="tab === 'evidencias'" class="row g-3">
+        <div class="col-lg-5">
+          <div class="mc-card p-4">
+            <h5>Adjuntar evidencia</h5>
+            <div class="alert alert-info small mb-3" role="status">
+              <div class="fw-semibold mb-1">Esta fotografía se asociará a:</div>
+              <div><strong>Orden:</strong> #{{ order.id }} · {{ order.tracking_code }}</div>
+              <div><strong>Cliente:</strong> {{ order.client_name }}</div>
+              <div><strong>Equipo:</strong> {{ order.equipment_description }} · Equipo #{{ order.equipment }}</div>
+              <div class="mt-1">La asociación se realiza automáticamente con la orden abierta.</div>
+            </div>
+            <p class="small text-muted">
+              Usa fotografías ficticias o sin datos identificatorios. Antes de publicar
+              imágenes en presentaciones o repositorios, oculta los datos personales
+              y los identificadores del equipo.
+            </p>
+
+            <div v-if="uploadError" class="alert alert-danger" role="alert">{{ uploadError }}</div>
+            <div v-if="uploadSuccess" class="alert alert-success" role="status">{{ uploadSuccess }}</div>
+
+            <form @submit.prevent="uploadEvidence">
+              <label for="evidence-stage" class="form-label">Etapa del servicio</label>
+              <select
+                id="evidence-stage"
+                v-model="evidenceStage"
+                class="form-select mb-3"
+                :disabled="uploadingEvidence"
+                required
+              >
+                <option v-for="stage in evidenceStages" :key="stage.value" :value="stage.value">
+                  {{ stage.label }}
+                </option>
+              </select>
+
+              <label for="evidence-description" class="form-label">Descripción (opcional)</label>
+              <textarea
+                id="evidence-description"
+                v-model="evidenceDescription"
+                class="form-control mb-3"
+                maxlength="250"
+                rows="2"
+                :disabled="uploadingEvidence"
+                placeholder="Ej.: Estado del equipo al ingresar."
+              ></textarea>
+
+              <label for="evidence-file" class="form-label">Fotografía</label>
+              <input
+                id="evidence-file"
+                ref="evidenceInput"
+                type="file"
+                accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                class="form-control mb-2"
+                :disabled="uploadingEvidence"
+                required
+                @change="selectEvidenceFile"
+              >
+              <div class="form-text mb-3">JPG, JPEG, PNG o WEBP; máximo 20 MB por archivo.</div>
+
+              <button
+                type="submit"
+                class="btn btn-primary"
+                :disabled="uploadingEvidence || !evidenceFile"
+              >
+                <span v-if="uploadingEvidence" class="spinner-border spinner-border-sm me-2"></span>
+                {{ uploadingEvidence ? 'Subiendo...' : 'Guardar evidencia' }}
+              </button>
+            </form>
+          </div>
+        </div>
+
+        <div class="col-lg-7">
+          <div class="mc-card p-4">
+            <div class="d-flex justify-content-between gap-2 align-items-center mb-3">
+              <h5 class="mb-0">Evidencias registradas</h5>
+              <button
+                type="button"
+                class="btn btn-sm btn-outline-secondary"
+                :disabled="evidenceLoading"
+                @click="loadEvidences"
+              >
+                Actualizar
+              </button>
+            </div>
+            <div v-if="evidenceLoading" class="text-muted">Cargando evidencias...</div>
+            <div v-else-if="evidenceError" class="alert alert-danger" role="alert">
+              {{ evidenceError }}
+            </div>
+            <div v-else-if="!evidences.length" class="text-muted">
+              Esta orden todavía no tiene evidencias fotográficas.
+            </div>
+            <div v-else class="d-flex flex-column gap-3">
+              <div v-for="item in evidences" :key="item.id" class="border rounded p-3">
+                <div class="d-flex flex-wrap justify-content-between gap-2">
+                  <strong>{{ stageLabel(item.stage) }} · Evidencia #{{ item.id }}</strong>
+                  <span class="small text-muted">{{ formatDate(item.created_at) }}</span>
+                </div>
+                <div class="small mt-1">Registrada por: {{ item.uploaded_by_username || 'No disponible' }}</div>
+                <div v-if="item.description" class="mt-2">{{ item.description }}</div>
+
+                <div v-if="imageErrors[item.id]" class="alert alert-warning small mt-2 mb-0">
+                  {{ imageErrors[item.id] }}
+                </div>
+                <div class="d-flex flex-wrap gap-2 mt-3">
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-outline-primary"
+                    :disabled="imageLoading[item.id]"
+                    @click="toggleEvidenceImage(item)"
+                  >
+                    {{ imageLoading[item.id] ? 'Cargando imagen...' : imageUrls[item.id] ? 'Ocultar fotografía' : 'Ver fotografía' }}
+                  </button>
+                  <a
+                    v-if="imageUrls[item.id]"
+                    :href="imageUrls[item.id]"
+                    :download="`evidencia-${item.id}`"
+                    class="btn btn-sm btn-outline-secondary"
+                  >
+                    Descargar
+                  </a>
+                </div>
+                <img
+                  v-if="imageUrls[item.id]"
+                  :src="imageUrls[item.id]"
+                  :alt="`Evidencia ${item.id}: ${stageLabel(item.stage)}`"
+                  class="img-fluid rounded border mt-3"
+                  style="max-height: 360px; object-fit: contain;"
+                >
+              </div>
+            </div>
           </div>
         </div>
       </section>
