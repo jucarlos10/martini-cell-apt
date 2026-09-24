@@ -1,8 +1,9 @@
 import mimetypes
 
+from django.db import transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.generics import (
     ListCreateAPIView,
     RetrieveUpdateAPIView,
@@ -14,6 +15,7 @@ from rest_framework.views import APIView
 
 from .models import (
     OrderEvidence,
+    OrderStatusHistory,
     OrderTechnicalReport,
     ServiceOrder,
 )
@@ -23,6 +25,117 @@ from .serializers import (
     OrderTechnicalReportSerializer,
     ServiceOrderSerializer,
 )
+
+
+# Transiciones permitidas para la primera versión de HU-10.
+# Conservamos los diez estados existentes en el frontend.
+STATUS_TRANSITIONS = {
+    ServiceOrder.Status.RECEIVED: (
+        ServiceOrder.Status.DIAGNOSIS,
+    ),
+    ServiceOrder.Status.DIAGNOSIS: (
+        ServiceOrder.Status.AUTHORIZATION,
+        ServiceOrder.Status.REJECTED,
+    ),
+    ServiceOrder.Status.AUTHORIZATION: (
+        ServiceOrder.Status.PART,
+        ServiceOrder.Status.REPAIR,
+        ServiceOrder.Status.REJECTED,
+    ),
+    ServiceOrder.Status.PART: (
+        ServiceOrder.Status.REPAIR,
+        ServiceOrder.Status.REJECTED,
+    ),
+    ServiceOrder.Status.REPAIR: (
+        ServiceOrder.Status.PART,
+        ServiceOrder.Status.TESTING,
+    ),
+    ServiceOrder.Status.TESTING: (
+        ServiceOrder.Status.REPAIR,
+        ServiceOrder.Status.READY,
+    ),
+    ServiceOrder.Status.READY: (
+        ServiceOrder.Status.DELIVERED,
+    ),
+    ServiceOrder.Status.REJECTED: (
+        ServiceOrder.Status.READY,
+    ),
+    ServiceOrder.Status.DELIVERED: (
+        ServiceOrder.Status.CLOSED,
+    ),
+    ServiceOrder.Status.CLOSED: (),
+}
+
+
+class OrderStatusChangeSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(
+        choices=ServiceOrder.Status.choices,
+    )
+
+    note = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=1000,
+    )
+
+
+class OrderStatusHistorySerializer(serializers.ModelSerializer):
+    from_status_display = serializers.CharField(
+        source="get_from_status_display",
+        read_only=True,
+    )
+
+    to_status_display = serializers.CharField(
+        source="get_to_status_display",
+        read_only=True,
+    )
+
+    changed_by_username = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrderStatusHistory
+        fields = (
+            "id",
+            "from_status",
+            "from_status_display",
+            "to_status",
+            "to_status_display",
+            "note",
+            "changed_by",
+            "changed_by_username",
+            "changed_at",
+        )
+
+        read_only_fields = fields
+
+    def get_changed_by_username(self, obj):
+        if not obj.changed_by_id:
+            return None
+
+        return obj.changed_by.username
+
+
+def get_order_status_data(order):
+    allowed = STATUS_TRANSITIONS.get(
+        order.status,
+        (),
+    )
+
+    return {
+        "order_id": order.id,
+        "tracking_code": order.tracking_code,
+        "status": order.status,
+        "status_display": order.get_status_display(),
+        "allowed_transitions": [
+            {
+                "status": next_status,
+                "status_display": ServiceOrder.Status(
+                    next_status
+                ).label,
+            }
+            for next_status in allowed
+        ],
+    }
 
 
 class ServiceOrderListCreateView(ListCreateAPIView):
@@ -49,6 +162,118 @@ class ServiceOrderDetailView(RetrieveUpdateAPIView):
     )
     serializer_class = ServiceOrderSerializer
     permission_classes = [IsAuthenticated]
+
+
+class OrderStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        order = get_object_or_404(
+            ServiceOrder,
+            pk=pk,
+        )
+
+        return Response(
+            get_order_status_data(order)
+        )
+
+    @transaction.atomic
+    def patch(self, request, pk):
+        if request.user.role not in {"ADMIN", "TECH"}:
+            return Response(
+                {
+                    "detail": (
+                        "No tienes permiso para cambiar "
+                        "el estado de una orden."
+                    )
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = OrderStatusChangeSerializer(
+            data=request.data
+        )
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        new_status = serializer.validated_data["status"]
+        note = serializer.validated_data.get(
+            "note",
+            "",
+        )
+
+        # Bloqueamos la orden durante la transición para evitar
+        # que dos solicitudes cambien su estado simultáneamente.
+        order = get_object_or_404(
+            ServiceOrder.objects.select_for_update(),
+            pk=pk,
+        )
+
+        previous_status = order.status
+
+        allowed = STATUS_TRANSITIONS.get(
+            previous_status,
+            (),
+        )
+
+        if new_status not in allowed:
+            return Response(
+                {
+                    "detail": (
+                        "No está permitido cambiar el estado "
+                        f"de {order.get_status_display()} "
+                        f"a {ServiceOrder.Status(new_status).label}."
+                    ),
+                    "current_status": previous_status,
+                    "allowed_transitions": list(allowed),
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        order.status = new_status
+        order.save(
+            update_fields=[
+                "status",
+                "updated_at",
+            ]
+        )
+
+        OrderStatusHistory.objects.create(
+            order=order,
+            from_status=previous_status,
+            to_status=new_status,
+            note=note,
+            changed_by=request.user,
+        )
+
+        return Response(
+            get_order_status_data(order)
+        )
+
+
+class OrderStatusHistoryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        order = get_object_or_404(
+            ServiceOrder,
+            pk=pk,
+        )
+
+        history = (
+            OrderStatusHistory.objects
+            .filter(order=order)
+            .select_related("changed_by")
+            .order_by("changed_at", "id")
+        )
+
+        serializer = OrderStatusHistorySerializer(
+            history,
+            many=True,
+        )
+
+        return Response(serializer.data)
 
 
 class OrderEvidenceListCreateView(ListCreateAPIView):
@@ -141,6 +366,7 @@ class OrderTechnicalReportView(APIView):
 
         return Response(serializer.data)
 
+    @transaction.atomic
     def post(self, request, pk):
         if not self.can_modify(request.user):
             return Response(
@@ -153,7 +379,24 @@ class OrderTechnicalReportView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        order = self.get_order(pk)
+        order = get_object_or_404(
+            ServiceOrder.objects.select_for_update(),
+            pk=pk,
+        )
+
+        if order.status in {
+            ServiceOrder.Status.DELIVERED,
+            ServiceOrder.Status.CLOSED,
+        }:
+            return Response(
+                {
+                    "detail": (
+                        "No se puede registrar un informe técnico "
+                        "en una orden entregada o cerrada."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if OrderTechnicalReport.objects.filter(
             order=order
@@ -190,6 +433,7 @@ class OrderTechnicalReportView(APIView):
             status=status.HTTP_201_CREATED,
         )
 
+    @transaction.atomic
     def patch(self, request, pk):
         if not self.can_modify(request.user):
             return Response(
@@ -202,7 +446,24 @@ class OrderTechnicalReportView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        order = self.get_order(pk)
+        order = get_object_or_404(
+            ServiceOrder.objects.select_for_update(),
+            pk=pk,
+        )
+
+        if order.status in {
+            ServiceOrder.Status.DELIVERED,
+            ServiceOrder.Status.CLOSED,
+        }:
+            return Response(
+                {
+                    "detail": (
+                        "No se puede modificar un informe técnico "
+                        "en una orden entregada o cerrada."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         report = get_object_or_404(
             OrderTechnicalReport,

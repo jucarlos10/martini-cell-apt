@@ -12,6 +12,7 @@ from accounts.models import User
 
 from .models import (
     OrderEvidence,
+    OrderStatusHistory,
     OrderTechnicalReport,
     OrderTechnicalReportHistory,
     ServiceOrder,
@@ -31,6 +32,11 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
         read_only=True,
     )
 
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
+
     class Meta:
         model = ServiceOrder
         fields = (
@@ -42,6 +48,8 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
             "equipment_description",
             "reported_issue",
             "initial_observations",
+            "status",
+            "status_display",
             "received_at",
             "updated_at",
             "created_by_username",
@@ -52,6 +60,8 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
             "tracking_code",
             "client_name",
             "equipment_description",
+            "status",
+            "status_display",
             "received_at",
             "updated_at",
             "created_by_username",
@@ -89,6 +99,20 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
             )
 
         return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+        order = super().create(validated_data)
+
+        OrderStatusHistory.objects.create(
+            order=order,
+            from_status=None,
+            to_status=order.status,
+            note="Registro inicial al crear la orden.",
+            changed_by=order.created_by,
+        )
+
+        return order
 
 
 class ServiceOrderHistorySerializer(serializers.ModelSerializer):
