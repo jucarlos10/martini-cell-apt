@@ -25,6 +25,7 @@ from .serializers import (
     OrderTechnicalReportSerializer,
     ServiceOrderSerializer,
 )
+from .services import calculate_order_times
 
 
 # Transiciones permitidas para la primera versión de HU-10.
@@ -274,6 +275,28 @@ class OrderStatusHistoryView(APIView):
         )
 
         return Response(serializer.data)
+
+
+class OrderTimesView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        order = get_object_or_404(
+            ServiceOrder,
+            pk=pk,
+        )
+
+        try:
+            result = calculate_order_times(order)
+        except ValueError as error:
+            return Response(
+                {
+                    "detail": str(error),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        return Response(result)
 
 
 class OrderEvidenceListCreateView(ListCreateAPIView):

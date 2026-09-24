@@ -7,6 +7,7 @@ from .views import (
     OrderStatusView,
     OrderTechnicalReportHistoryView,
     OrderTechnicalReportView,
+    OrderTimesView,
     ServiceOrderDetailView,
     ServiceOrderListCreateView,
 )
@@ -32,6 +33,11 @@ urlpatterns = [
         "<int:pk>/status/history/",
         OrderStatusHistoryView.as_view(),
         name="order-status-history",
+    ),
+    path(
+        "<int:pk>/times/",
+        OrderTimesView.as_view(),
+        name="order-times",
     ),
     path(
         "<int:pk>/evidence/",
