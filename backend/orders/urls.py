@@ -3,6 +3,8 @@ from django.urls import path
 from .views import (
     OrderEvidenceDownloadView,
     OrderEvidenceListCreateView,
+    OrderStatusHistoryView,
+    OrderStatusView,
     OrderTechnicalReportHistoryView,
     OrderTechnicalReportView,
     ServiceOrderDetailView,
@@ -20,6 +22,16 @@ urlpatterns = [
         "<int:pk>/",
         ServiceOrderDetailView.as_view(),
         name="service-order-detail",
+    ),
+    path(
+        "<int:pk>/status/",
+        OrderStatusView.as_view(),
+        name="order-status",
+    ),
+    path(
+        "<int:pk>/status/history/",
+        OrderStatusHistoryView.as_view(),
+        name="order-status-history",
     ),
     path(
         "<int:pk>/evidence/",

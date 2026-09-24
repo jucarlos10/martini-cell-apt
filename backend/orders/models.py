@@ -11,6 +11,18 @@ from devices.models import Equipment
 
 
 class ServiceOrder(models.Model):
+    class Status(models.TextChoices):
+        RECEIVED = "RECEIVED", "Ingresado"
+        DIAGNOSIS = "DIAGNOSIS", "Diagnóstico"
+        AUTHORIZATION = "AUTHORIZATION", "Autorización"
+        PART = "PART", "Espera de repuesto"
+        REPAIR = "REPAIR", "Reparación"
+        TESTING = "TESTING", "Pruebas"
+        READY = "READY", "Listo para retiro"
+        DELIVERED = "DELIVERED", "Entregado"
+        CLOSED = "CLOSED", "Cerrado"
+        REJECTED = "REJECTED", "No reparado/rechazado"
+
     tracking_code = models.CharField(
         max_length=20,
         unique=True,
@@ -33,6 +45,12 @@ class ServiceOrder(models.Model):
 
     initial_observations = models.TextField(
         blank=True,
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.RECEIVED,
     )
 
     received_at = models.DateTimeField(
@@ -303,4 +321,50 @@ class OrderTechnicalReportHistory(models.Model):
         return (
             f"{self.report.order.tracking_code} - "
             f"revisión {self.revision}"
+        )
+
+
+class OrderStatusHistory(models.Model):
+    order = models.ForeignKey(
+        ServiceOrder,
+        on_delete=models.PROTECT,
+        related_name="status_history",
+    )
+
+    # Vacío únicamente para el registro inicial de la orden.
+    from_status = models.CharField(
+        max_length=20,
+        choices=ServiceOrder.Status.choices,
+        null=True,
+        blank=True,
+    )
+
+    to_status = models.CharField(
+        max_length=20,
+        choices=ServiceOrder.Status.choices,
+    )
+
+    note = models.TextField(
+        blank=True,
+    )
+
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_status_changes",
+    )
+
+    changed_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering = ["changed_at", "id"]
+
+    def __str__(self):
+        return (
+            f"{self.order.tracking_code}: "
+            f"{self.from_status or 'INICIO'} → {self.to_status}"
         )
