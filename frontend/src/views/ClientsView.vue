@@ -51,6 +51,13 @@ const emptyEquipmentForm = () => ({
 
 const equipmentForm = ref(emptyEquipmentForm())
 
+// HU-06: hoja de vida del equipo seleccionado.
+const expandedEquipmentId = ref(null)
+const equipmentHistory = ref([])
+const equipmentHistoryLoading = ref(false)
+const equipmentHistoryError = ref('')
+let equipmentHistoryRequestId = 0
+
 let historyRequestId = 0
 
 const emptyForm = () => ({
@@ -294,6 +301,66 @@ async function loadHistory(clientId) {
   }
 }
 
+// Evitar que la hoja de vida de un equipo quede visible al cambiar de cliente.
+function clearEquipmentHistory() {
+  equipmentHistoryRequestId += 1
+  expandedEquipmentId.value = null
+  equipmentHistory.value = []
+  equipmentHistoryLoading.value = false
+  equipmentHistoryError.value = ''
+}
+
+// Consultar todas las órdenes vinculadas al mismo equipo en Django.
+async function loadEquipmentHistory(equipmentId) {
+  const requestId = ++equipmentHistoryRequestId
+
+  expandedEquipmentId.value = equipmentId
+  equipmentHistory.value = []
+  equipmentHistoryError.value = ''
+  equipmentHistoryLoading.value = true
+
+  try {
+    const response = await authenticatedFetch(
+      `/api/devices/${equipmentId}/history/`
+    )
+
+    if (!response.ok) {
+      throw new Error(
+        response.status === 403
+          ? 'No tienes permisos para consultar esta hoja de vida.'
+          : 'No fue posible cargar el historial técnico del equipo.'
+      )
+    }
+
+    const data = await response.json()
+    if (requestId !== equipmentHistoryRequestId) return
+
+    equipmentHistory.value = Array.isArray(data)
+      ? data
+      : data.results || []
+
+  } catch (err) {
+    if (requestId === equipmentHistoryRequestId) {
+      equipmentHistoryError.value =
+        err.message || 'Error al consultar la hoja de vida.'
+    }
+
+  } finally {
+    if (requestId === equipmentHistoryRequestId) {
+      equipmentHistoryLoading.value = false
+    }
+  }
+}
+
+function toggleEquipmentHistory(item) {
+  if (expandedEquipmentId.value === item.id) {
+    clearEquipmentHistory()
+    return
+  }
+
+  loadEquipmentHistory(item.id)
+}
+
 // Cargar el listado de equipos desde la API real.
 async function loadEquipment() {
   equipmentLoading.value = true
@@ -400,6 +467,7 @@ async function createEquipment() {
 // anterior para no asociar un equipo a un cliente equivocado.
 watch(selectedId, loadHistory)
 watch(selectedId, () => {
+  clearEquipmentHistory()
   showEquipmentForm.value = false
   equipmentFormError.value = ''
 })
@@ -987,6 +1055,93 @@ onMounted(() => {
               </div>
               <div v-if="item.observations" class="small mt-1">
                 Observaciones: {{ item.observations }}
+              </div>
+
+              <!-- HU-06: historial de atenciones del equipo. -->
+              <button
+                type="button"
+                class="btn btn-sm btn-outline-primary mt-3"
+                :aria-expanded="expandedEquipmentId === item.id"
+                @click="toggleEquipmentHistory(item)"
+              >
+                <i class="bi bi-clock-history me-1"></i>
+                {{ expandedEquipmentId === item.id ? 'Ocultar hoja de vida' : 'Ver hoja de vida' }}
+              </button>
+
+              <div
+                v-if="expandedEquipmentId === item.id"
+                class="border-top mt-3 pt-3"
+              >
+                <h6>Historial técnico · Equipo #{{ item.id }}</h6>
+
+                <div v-if="equipmentHistoryLoading" class="text-muted small">
+                  Cargando historial técnico...
+                </div>
+
+                <div v-else-if="equipmentHistoryError" class="alert alert-danger" role="alert">
+                  {{ equipmentHistoryError }}
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-outline-danger ms-2"
+                    @click="loadEquipmentHistory(item.id)"
+                  >
+                    Reintentar
+                  </button>
+                </div>
+
+                <div v-else-if="equipmentHistory.length === 0" class="text-muted small">
+                  Este equipo todavía no tiene órdenes de atención registradas.
+                </div>
+
+                <div v-else class="d-flex flex-column gap-3">
+                  <div
+                    v-for="order in equipmentHistory"
+                    :key="order.id"
+                    class="border rounded p-3"
+                  >
+                    <div class="fw-semibold">
+                      Orden #{{ order.id }} · {{ order.tracking_code }}
+                    </div>
+                    <div class="small text-muted mb-2">
+                      Ingreso: {{ formatDate(order.received_at) }}
+                    </div>
+                    <div class="small mt-1">
+                      <strong>Falla reportada:</strong>
+                      {{ order.reported_issue || 'Sin información' }}
+                    </div>
+                    <div v-if="order.initial_observations" class="small mt-1">
+                      <strong>Observaciones iniciales:</strong>
+                      {{ order.initial_observations }}
+                    </div>
+                    <div class="small mt-1">
+                      <strong>Diagnóstico:</strong>
+                      {{ order.diagnosis || 'Aún sin informe técnico' }}
+                    </div>
+                    <div class="small mt-1">
+                      <strong>Reparación:</strong>
+                      {{ order.repair_actions || 'Aún sin informe técnico' }}
+                    </div>
+                    <div v-if="order.repair_observations" class="small mt-1">
+                      <strong>Observaciones de reparación:</strong>
+                      {{ order.repair_observations }}
+                    </div>
+                    <div v-if="order.parts_description" class="small mt-1">
+                      <strong>Repuestos:</strong>
+                      {{ order.parts_description }}
+                    </div>
+                    <div class="small mt-1">
+                      <strong>Resultado:</strong>
+                      {{ order.result_display || 'Pendiente de informe técnico' }}
+                    </div>
+                    <div v-if="order.technician_username" class="small mt-1">
+                      <strong>Técnico:</strong>
+                      {{ order.technician_username }}
+                    </div>
+                    <div class="small text-muted mt-2">
+                      El acceso al detalle de esta orden se conectará en HU-07.
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
