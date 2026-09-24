@@ -1137,8 +1137,14 @@ onMounted(() => {
                       <strong>Técnico:</strong>
                       {{ order.technician_username }}
                     </div>
-                    <div class="small text-muted mt-2">
-                      El acceso al detalle de esta orden se conectará en HU-07.
+                    <div class="mt-3">
+                      <router-link
+                        :to="`/ordenes/${order.id}`"
+                        class="btn btn-sm btn-outline-primary"
+                      >
+                        <i class="bi bi-box-arrow-up-right me-1"></i>
+                        Abrir orden
+                      </router-link>
                     </div>
                   </div>
                 </div>

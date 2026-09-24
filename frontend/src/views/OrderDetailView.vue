@@ -1,26 +1,370 @@
 <script setup>
-import {ref,computed} from 'vue'; import {useRoute} from 'vue-router'; import AdminLayout from '../layouts/AdminLayout.vue'; import PageHeader from '../components/PageHeader.vue'; import StatusBadge from '../components/StatusBadge.vue'; import {getOrder,statusLabels,statusOrder,updateOrderStatus,persist} from '../mockStore'
-const route=useRoute(),order=getOrder(route.params.id),tab=ref('resumen'),message=ref(''),newStatus=ref(order?.status||'RECEIVED'),note=ref(''),authResult=ref('Autorizado'),authChannel=ref('Mensajería'),authNotes=ref(''),fileName=ref('')
-const user=JSON.parse(localStorage.getItem('martini_demo_user')||'{}'); const canTechnical=['ADMIN','TECH'].includes(user.role)
-function fmt(sec){sec=Number(sec||0);const d=Math.floor(sec/86400),h=Math.floor((sec%86400)/3600),m=Math.floor((sec%3600)/60);return [d?`${d} d`:'',h?`${h} h`:'',`${m} min`].filter(Boolean).join(' ')}
-function save(){order.margin=Math.max(0,Number(order.price||0)-Number(order.costs||0));persist();message.value='Cambios guardados en el prototipo local.'}
-function changeStatus(){updateOrderStatus(order,newStatus.value,note.value);note.value='';message.value='Estado actualizado en la demostración.'}
-function registerAuth(){order.history.push(['AUTHORIZATION','Autorización',new Date().toISOString(),`${authResult.value} vía ${authChannel.value}. ${authNotes.value}`]);persist();message.value='Autorización registrada de forma ficticia.'}
-function evidence(e){fileName.value=e.target.files?.[0]?.name||'';if(fileName.value)message.value='Fotografía seleccionada solo para demostración. No se sube a ningún servidor.'}
-const marginPct=computed(()=>Number(order?.price)>0?Math.round(Number(order.margin)/Number(order.price)*100):0)
+import { ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
+
+import AdminLayout from '../layouts/AdminLayout.vue'
+import PageHeader from '../components/PageHeader.vue'
+import StatusBadge from '../components/StatusBadge.vue'
+import { authenticatedFetch } from '../services/auth'
+
+const route = useRoute()
+
+const order = ref(null)
+const history = ref([])
+const technicalReport = ref(null)
+const times = ref(null)
+
+const tab = ref('resumen')
+const loading = ref(true)
+const error = ref('')
+const historyError = ref('')
+const reportError = ref('')
+const timesError = ref('')
+
+// Conservamos la estructura de pestañas del prototipo.
+// Las secciones pendientes se habilitarán al integrar sus historias.
+const tabs = [
+  { key: 'resumen', label: 'Resumen', enabled: true },
+  { key: 'diagnostico', label: 'Diagnóstico', enabled: true },
+  { key: 'linea', label: 'Línea de tiempo', enabled: true },
+  { key: 'evidencias', label: 'Evidencias', enabled: false },
+  { key: 'repuestos', label: 'Repuestos y costos', enabled: false },
+  { key: 'garantia', label: 'Garantía', enabled: false },
+  { key: 'viabilidad', label: 'Índice de viabilidad', enabled: false },
+]
+
+function formatDate(value) {
+  if (!value) return 'No disponible'
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Fecha no disponible'
+
+  return date.toLocaleString('es-CL', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  })
+}
+
+async function getResponse(url) {
+  const response = await authenticatedFetch(url)
+  const data = await response.json().catch(() => null)
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    data,
+  }
+}
+
+let loadSequence = 0
+
+async function loadOrder() {
+  const sequence = ++loadSequence
+  const orderId = String(route.params.id ?? '')
+
+  loading.value = true
+  error.value = ''
+  historyError.value = ''
+  reportError.value = ''
+  timesError.value = ''
+
+  order.value = null
+  history.value = []
+  technicalReport.value = null
+  times.value = null
+  tab.value = 'resumen'
+
+  if (!/^[1-9]\d*$/.test(orderId)) {
+    error.value = 'El ID de la orden no es válido.'
+    loading.value = false
+    return
+  }
+
+  try {
+    const orderResponse = await getResponse(`/api/orders/${orderId}/`)
+    if (sequence !== loadSequence) return
+
+    if (!orderResponse.ok) {
+      error.value = orderResponse.status === 404
+        ? 'La orden solicitada no existe.'
+        : 'No fue posible cargar la orden de servicio.'
+      return
+    }
+
+    order.value = orderResponse.data
+
+    // Estas consultas son de lectura. Si alguna falla, conservamos
+    // el detalle principal y mostramos el problema en su sección.
+    const [historyResult, reportResult, timesResult] = await Promise.allSettled([
+      getResponse(`/api/orders/${orderId}/status/history/`),
+      getResponse(`/api/orders/${orderId}/technical-report/`),
+      getResponse(`/api/orders/${orderId}/times/`),
+    ])
+
+    if (sequence !== loadSequence) return
+
+    if (
+      historyResult.status === 'fulfilled' &&
+      historyResult.value.ok &&
+      Array.isArray(historyResult.value.data)
+    ) {
+      history.value = historyResult.value.data
+    } else {
+      historyError.value = 'No fue posible cargar la línea de tiempo.'
+    }
+
+    if (reportResult.status === 'fulfilled') {
+      if (reportResult.value.ok) {
+        technicalReport.value = reportResult.value.data
+      } else if (reportResult.value.status !== 404) {
+        reportError.value = 'No fue posible consultar el informe técnico.'
+      }
+    } else {
+      reportError.value = 'No fue posible consultar el informe técnico.'
+    }
+
+    if (timesResult.status === 'fulfilled') {
+      if (timesResult.value.ok) {
+        times.value = timesResult.value.data
+      } else {
+        timesError.value = timesResult.value.status === 409
+          ? (timesResult.value.data?.detail || 'El historial no permite calcular los tiempos.')
+          : 'No fue posible calcular los tiempos del servicio.'
+      }
+    } else {
+      timesError.value = 'No fue posible calcular los tiempos del servicio.'
+    }
+  } catch (err) {
+    if (sequence === loadSequence) {
+      error.value = err?.message || 'No fue posible cargar la orden de servicio.'
+    }
+  } finally {
+    if (sequence === loadSequence) loading.value = false
+  }
+}
+
+// Permite cambiar entre /ordenes/1 y /ordenes/2 sin mostrar datos antiguos.
+watch(() => route.params.id, loadOrder, { immediate: true })
 </script>
-<template><AdminLayout>
-<div v-if="!order" class="alert alert-warning">Orden no encontrada.</div>
-<template v-else>
-<PageHeader>{{order.code}} <StatusBadge :status="order.status" :label="statusLabels[order.status]"/><template #subtitle>{{order.device_name}} · Cliente: {{order.client_name}} · Responsable: {{order.assigned_name}}</template><template #actions><button v-if="canTechnical" class="btn btn-primary" @click="tab='linea'">Actualizar estado</button></template></PageHeader>
-<div v-if="message" class="alert alert-success py-2">{{message}}</div>
-<div class="section-tabs mb-4"><button v-for="t in [['resumen','Resumen'],['diagnostico','Diagnóstico'],['linea','Línea de tiempo'],['evidencias','Evidencias'],['repuestos','Repuestos y costos'],['garantia','Garantía'],['viabilidad','Índice de viabilidad']]" :class="{active:tab===t[0]}" @click="tab=t[0]">{{t[1]}}</button></div>
-<section v-if="tab==='resumen'" class="row g-3"><div class="col-lg-8"><div class="mc-card p-4 h-100"><h5>Información general</h5><div class="row g-3 mt-1"><div class="col-md-6"><div class="mc-muted small">Equipo</div><strong>{{order.device_name}}</strong></div><div class="col-md-6"><div class="mc-muted small">Estado actual</div><StatusBadge :status="order.status" :label="statusLabels[order.status]"/></div><div class="col-md-6"><div class="mc-muted small">Falla reportada</div>{{order.reported_issue}}</div><div class="col-md-6"><div class="mc-muted small">Ingreso</div>{{new Date(order.created_at).toLocaleString('es-CL')}}</div><div class="col-md-6"><div class="mc-muted small">Diagnóstico actual</div>{{order.diagnosis||'Pendiente'}}</div><div class="col-md-6"><div class="mc-muted small">Trabajo realizado</div>{{order.repair_work||'Pendiente'}}</div></div></div></div><div class="col-lg-4"><div class="mc-card p-4"><h5>Tiempos del servicio</h5><table class="table small mb-0"><tbody><tr><td>Tiempo técnico</td><td class="text-end fw-semibold">{{fmt(order.times.technical)}}</td></tr><tr><td>Espera autorización</td><td class="text-end">{{fmt(order.times.authorization)}}</td></tr><tr><td>Espera repuesto</td><td class="text-end">{{fmt(order.times.part)}}</td></tr><tr><td>Espera cliente</td><td class="text-end">{{fmt(order.times.client)}}</td></tr><tr class="fw-bold"><td>Total</td><td class="text-end">{{fmt(order.times.total)}}</td></tr></tbody></table></div></div></section>
-<section v-if="tab==='diagnostico'" class="mc-card p-4"><h5>Diagnóstico y reparación</h5><p class="screen-note">Campos interactivos solo para validar la experiencia de usuario.</p><label class="form-label mt-3">Diagnóstico definitivo</label><textarea v-model="order.diagnosis" class="form-control mb-3" rows="4"></textarea><label class="form-label">Reparación realizada</label><textarea v-model="order.repair_work" class="form-control mb-3" rows="4"></textarea><label class="form-label">Observaciones internas</label><textarea v-model="order.observations" class="form-control mb-3" rows="3"></textarea><button class="btn btn-primary" @click="save">Guardar cambios demo</button></section>
-<section v-if="tab==='linea'" class="row g-4"><div class="col-lg-7"><div class="mc-card p-4"><h5>Línea de tiempo</h5><div class="timeline mt-4"><div class="timeline-item" v-for="ev in [...order.history].reverse()"><div class="fw-semibold">{{ev[1]}}</div><div class="small text-muted">{{new Date(ev[2]).toLocaleString('es-CL')}}</div><div class="mt-1">{{ev[3]}}</div></div></div></div></div><div class="col-lg-5"><div class="mc-card p-4"><h5>Actualizar estado</h5><label class="form-label mt-3">Nuevo estado</label><select v-model="newStatus" class="form-select mb-3"><option v-for="s in statusOrder" :value="s">{{statusLabels[s]}}</option><option value="REJECTED">No reparado/rechazado</option></select><label class="form-label">Observación</label><textarea v-model="note" class="form-control mb-3" rows="3"></textarea><button class="btn btn-primary" @click="changeStatus">Guardar actualización</button></div><div class="mc-card p-4 mt-3"><h5>Registro interno de autorización</h5><p class="small text-muted">La autorización se obtiene fuera de la plataforma; aquí solo se deja constancia.</p><select v-model="authResult" class="form-select mb-2"><option>Autorizado</option><option>Pendiente</option><option>Rechazado</option></select><select v-model="authChannel" class="form-select mb-2"><option>Mensajería</option><option>Teléfono</option><option>Presencial</option><option>Otro</option></select><textarea v-model="authNotes" class="form-control mb-2" placeholder="Observaciones"></textarea><button class="btn btn-outline-primary" @click="registerAuth">Registrar autorización demo</button></div></div></section>
-<section v-if="tab==='evidencias'" class="mc-card p-4"><h5>Evidencias</h5><p class="text-muted small">Las fotografías deben ser ficticias o anonimizadas. En este prototipo no se envían archivos.</p><div class="row g-3"><div class="col-md-6"><input type="file" accept="image/*" class="form-control" @change="evidence"></div><div class="col-md-6"><div class="fake-photo"><span v-if="fileName"><i class="bi bi-image me-2"></i>{{fileName}}</span><span v-else>Vista previa simulada</span></div></div></div></section>
-<section v-if="tab==='repuestos'" class="row g-3"><div class="col-lg-7"><div class="mc-card p-4"><h5>Repuestos asociados</h5><table class="table"><thead><tr><th>Repuesto</th><th>Proveedor</th><th>Costo</th></tr></thead><tbody><tr><td>Pantalla compatible</td><td>Proveedor A</td><td>${{Number(order.costs||0).toLocaleString('es-CL')}}</td></tr></tbody></table></div></div><div class="col-lg-5"><div class="mc-card p-4"><h5>Precio, costos y margen</h5><label class="form-label">Precio cobrado</label><input v-model.number="order.price" type="number" class="form-control mb-2"><label class="form-label">Costos directos</label><input v-model.number="order.costs" type="number" class="form-control mb-2"><button class="btn btn-primary mb-3" @click="save">Recalcular</button><div class="border-top pt-3"><div class="d-flex justify-content-between"><span>Margen estimado</span><strong>${{Number(order.margin||0).toLocaleString('es-CL')}}</strong></div><div class="small text-muted">{{marginPct}}% del precio</div></div></div></div></section>
-<section v-if="tab==='garantia'" class="mc-card p-4"><h5>Garantía</h5><div class="row g-3"><div class="col-md-4"><label class="form-label">Estado</label><select class="form-select"><option>Vigente</option><option>Vencida</option><option>Utilizada</option></select></div><div class="col-md-4"><label class="form-label">Inicio</label><input type="date" class="form-control" value="2026-09-12"></div><div class="col-md-4"><label class="form-label">Término</label><input type="date" class="form-control" value="2026-12-12"></div><div class="col-12"><label class="form-label">Condiciones</label><textarea class="form-control" rows="3">Garantía por funcionamiento del repuesto instalado.</textarea></div></div></section>
-<section v-if="tab==='viabilidad'" class="row g-3"><div class="col-lg-4"><div class="mc-card p-4 text-center"><div class="score-circle mx-auto"><div class="fs-3 fw-bold">{{order.viability.score}}</div><div class="small">/100</div></div><h5 class="mt-3">{{order.viability.label}}</h5><p class="small text-muted mb-0">Resultado orientativo. La decisión final corresponde al técnico.</p></div></div><div class="col-lg-8"><div class="mc-card p-4"><h5>Factores considerados</h5><table class="table mb-3"><tbody><tr><td>Dificultad técnica</td><td class="text-end fw-semibold">{{order.viability.difficulty}}</td></tr><tr><td>Disponibilidad/costo del repuesto</td><td class="text-end fw-semibold">{{order.viability.part}} / {{order.viability.cost}}</td></tr><tr><td>Margen estimado</td><td class="text-end fw-semibold">{{order.viability.margin}}</td></tr><tr><td>Tiempo requerido</td><td class="text-end fw-semibold">{{order.viability.time}}</td></tr><tr><td>Riesgo de garantía</td><td class="text-end fw-semibold">{{order.viability.warranty}}</td></tr></tbody></table><div class="alert alert-light border mb-0"><strong>Explicación:</strong> la disponibilidad del repuesto y el margen favorecen el resultado; la dificultad y el tiempo pueden reducirlo. Esta versión no ejecuta una regla real de negocio.</div></div></div></section>
+
+<template>
+  <AdminLayout>
+    <div v-if="loading" class="mc-card p-4 text-center">
+      <div class="spinner-border text-primary mb-2" role="status"></div>
+      <div class="text-muted">Cargando orden de servicio...</div>
+    </div>
+
+    <div v-else-if="error" class="alert alert-warning" role="alert">
+      {{ error }}
+      <div class="mt-3">
+        <router-link to="/ordenes" class="btn btn-outline-secondary btn-sm">
+          Volver a órdenes
+        </router-link>
+        <button type="button" class="btn btn-outline-primary btn-sm ms-2" @click="loadOrder">
+          Reintentar
+        </button>
+      </div>
+    </div>
+
+    <template v-else-if="order">
+      <PageHeader>
+        {{ order.tracking_code }}
+        <StatusBadge
+          :status="order.status"
+          :label="order.status_display || order.status"
+        />
+
+        <template #subtitle>
+          {{ order.equipment_description }} · Cliente: {{ order.client_name }}
+          · Registrado por: {{ order.created_by_username || 'No disponible' }}
+        </template>
+
+        <template #actions>
+          <router-link to="/ordenes" class="btn btn-outline-secondary">
+            Volver a órdenes
+          </router-link>
+        </template>
+      </PageHeader>
+
+      <div class="section-tabs mb-4">
+        <button
+          v-for="item in tabs"
+          :key="item.key"
+          type="button"
+          :class="{ active: tab === item.key }"
+          :disabled="!item.enabled"
+          :title="item.enabled ? item.label : `${item.label}: integración pendiente`"
+          @click="tab = item.key"
+        >
+          {{ item.label }}
+          <span v-if="!item.enabled" class="small">(pendiente)</span>
+        </button>
+      </div>
+
+      <!-- RESUMEN: información real de la orden y sus tiempos -->
+      <section v-if="tab === 'resumen'" class="row g-3">
+        <div class="col-lg-8">
+          <div class="mc-card p-4 h-100">
+            <h5>Información general</h5>
+            <div class="row g-3 mt-1">
+              <div class="col-md-6">
+                <div class="mc-muted small">Equipo</div>
+                <strong>{{ order.equipment_description }}</strong>
+                <div class="small text-muted">Equipo #{{ order.equipment }}</div>
+              </div>
+
+              <div class="col-md-6">
+                <div class="mc-muted small">Estado actual</div>
+                <StatusBadge
+                  :status="order.status"
+                  :label="order.status_display || order.status"
+                />
+              </div>
+
+              <div class="col-md-6">
+                <div class="mc-muted small">Falla reportada</div>
+                <div>{{ order.reported_issue }}</div>
+              </div>
+
+              <div class="col-md-6">
+                <div class="mc-muted small">Observaciones iniciales</div>
+                <div>{{ order.initial_observations || 'Sin observaciones adicionales' }}</div>
+              </div>
+
+              <div class="col-md-6">
+                <div class="mc-muted small">Ingreso</div>
+                <div>{{ formatDate(order.received_at) }}</div>
+              </div>
+
+              <div class="col-md-6">
+                <div class="mc-muted small">Última actualización</div>
+                <div>{{ formatDate(order.updated_at) }}</div>
+              </div>
+
+              <div class="col-md-6">
+                <div class="mc-muted small">Diagnóstico actual</div>
+                <div>{{ technicalReport?.diagnosis || (reportError || 'Pendiente') }}</div>
+              </div>
+
+              <div class="col-md-6">
+                <div class="mc-muted small">Trabajo realizado</div>
+                <div>{{ technicalReport?.repair_actions || (reportError || 'Pendiente') }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-lg-4">
+          <div class="mc-card p-4">
+            <h5>Tiempos del servicio</h5>
+            <div v-if="timesError" class="alert alert-warning small mb-0">
+              {{ timesError }}
+            </div>
+            <table v-else-if="times" class="table small mb-0">
+              <tbody>
+                <tr>
+                  <td>Tiempo técnico</td>
+                  <td class="text-end fw-semibold">{{ times.technical_display }}</td>
+                </tr>
+                <tr>
+                  <td>Tiempo de espera</td>
+                  <td class="text-end">{{ times.waiting_display }}</td>
+                </tr>
+                <tr class="fw-bold">
+                  <td>Total</td>
+                  <td class="text-end">{{ times.total_display }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-else class="text-muted">Sin datos disponibles.</div>
+            <div v-if="times" class="small text-muted mt-2">
+              Calculado al consultar la orden. Los tiempos pueden seguir aumentando.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- DIAGNÓSTICO: lectura del informe real, cuando existe -->
+      <section v-if="tab === 'diagnostico'" class="mc-card p-4">
+        <h5>Diagnóstico y reparación</h5>
+        <div v-if="reportError" class="alert alert-warning">{{ reportError }}</div>
+        <div v-else-if="!technicalReport" class="alert alert-info mb-0">
+          Esta orden todavía no tiene un informe técnico registrado.
+          La edición del informe se integrará en su historia correspondiente.
+        </div>
+        <div v-else class="row g-3 mt-1">
+          <div class="col-md-6">
+            <div class="mc-muted small">Diagnóstico definitivo</div>
+            <div class="fw-semibold">{{ technicalReport.diagnosis }}</div>
+          </div>
+          <div class="col-md-6">
+            <div class="mc-muted small">Reparación realizada</div>
+            <div>{{ technicalReport.repair_actions }}</div>
+          </div>
+          <div class="col-md-6">
+            <div class="mc-muted small">Observaciones de reparación</div>
+            <div>{{ technicalReport.repair_observations || 'Sin observaciones' }}</div>
+          </div>
+          <div class="col-md-6">
+            <div class="mc-muted small">Repuestos utilizados</div>
+            <div>{{ technicalReport.parts_description || 'Sin descripción de repuestos' }}</div>
+          </div>
+          <div class="col-md-6">
+            <div class="mc-muted small">Resultado</div>
+            <strong>{{ technicalReport.result_display || technicalReport.result }}</strong>
+          </div>
+          <div class="col-md-6">
+            <div class="mc-muted small">Técnico responsable</div>
+            <strong>{{ technicalReport.technician_username }}</strong>
+          </div>
+        </div>
+      </section>
+
+      <!-- LÍNEA DE TIEMPO: historial persistido en PostgreSQL -->
+      <section v-if="tab === 'linea'" class="row g-4">
+        <div class="col-lg-7">
+          <div class="mc-card p-4">
+            <h5>Línea de tiempo</h5>
+            <div v-if="historyError" class="alert alert-warning mt-3">
+              {{ historyError }}
+            </div>
+            <div v-else-if="!history.length" class="text-muted mt-3">
+              No hay eventos registrados para esta orden.
+            </div>
+            <div v-else class="timeline mt-4">
+              <div
+                v-for="event in [...history].reverse()"
+                :key="event.id"
+                class="timeline-item"
+              >
+                <div class="fw-semibold">
+                  {{ event.to_status_display || event.to_status }}
+                </div>
+                <div class="small text-muted">
+                  {{ formatDate(event.changed_at) }}
+                  · {{ event.changed_by_username || 'Usuario no disponible' }}
+                </div>
+                <div v-if="event.note" class="mt-1">{{ event.note }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-lg-5">
+          <div class="mc-card p-4">
+            <h5>Estado de la orden</h5>
+            <StatusBadge
+              :status="order.status"
+              :label="order.status_display || order.status"
+            />
+            <p class="small text-muted mt-3 mb-0">
+              Esta línea de tiempo utiliza el historial real de Django.
+              La actualización de estados se conectará al integrar HU-10;
+              no se guardarán cambios ficticios en el navegador.
+            </p>
+          </div>
+        </div>
+      </section>
+    </template>
+  </AdminLayout>
 </template>
-</AdminLayout></template>
