@@ -1,5 +1,6 @@
 from django.urls import path
 
+from .public_tracking import PublicOrderStatusView
 from .views import (
     OrderEvidenceDownloadView,
     OrderEvidenceListCreateView,
@@ -18,6 +19,11 @@ urlpatterns = [
         "",
         ServiceOrderListCreateView.as_view(),
         name="service-order-list-create",
+    ),
+    path(
+        "public/<str:tracking_code>/",
+        PublicOrderStatusView.as_view(),
+        name="public-order-status",
     ),
     path(
         "<int:pk>/",
