@@ -1,5 +1,7 @@
+
 from django.urls import path
 
+from .financial_views import OrderFinancialView
 from .public_tracking import PublicOrderStatusView
 from .views import (
     OrderEvidenceDownloadView,
@@ -45,6 +47,14 @@ urlpatterns = [
         OrderTimesView.as_view(),
         name="order-times",
     ),
+
+    # HU-14: Costos, precios y margen estimado.
+    path(
+        "<int:pk>/financial/",
+        OrderFinancialView.as_view(),
+        name="order-financial",
+    ),
+
     path(
         "<int:pk>/evidence/",
         OrderEvidenceListCreateView.as_view(),

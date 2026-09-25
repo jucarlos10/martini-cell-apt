@@ -12,6 +12,8 @@ const currentUser = getCurrentUser()
 const canEditReport = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canChangeStatus = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canRegisterParts = ['ADMIN', 'TECH'].includes(currentUser?.role)
+const canViewFinancial = ['ADMIN', 'TECH'].includes(currentUser?.role)
+const canEditFinancial = currentUser?.role === 'ADMIN'
 
 const order = ref(null)
 const history = ref([])
@@ -108,11 +110,134 @@ const usedPartsTotal = computed(() =>
 )
 let orderPartsRequestId = 0
 
+// HU-14: resumen calculado en Django y datos financieros editables por ADMIN.
+const financial = ref(null)
+const financialLoading = ref(false)
+const financialError = ref('')
+const financialSaving = ref(false)
+const financialFormError = ref('')
+const financialSuccess = ref('')
+const emptyFinancialForm = () => ({
+  price_charged: '',
+  labor_cost: '0.00',
+  other_direct_cost: '0.00',
+  notes: '',
+})
+const financialForm = ref(emptyFinancialForm())
+let financialRequestId = 0
+
+function resetFinancial() {
+  ++financialRequestId
+  financial.value = null
+  financialLoading.value = false
+  financialError.value = ''
+  financialSaving.value = false
+  financialFormError.value = ''
+  financialSuccess.value = ''
+  financialForm.value = emptyFinancialForm()
+}
+
+function syncFinancialForm(data) {
+  financialForm.value = {
+    price_charged: data.price_charged ?? '',
+    labor_cost: data.labor_cost ?? '0.00',
+    other_direct_cost: data.other_direct_cost ?? '0.00',
+    notes: data.notes ?? '',
+  }
+}
+
+async function loadFinancial() {
+  if (!order.value || !canViewFinancial) return
+  const orderId = order.value.id
+  const sequence = loadSequence
+  const requestId = ++financialRequestId
+  const isCurrent = () => sequence === loadSequence && requestId === financialRequestId
+  financialLoading.value = true
+  financialError.value = ''
+
+  try {
+    const response = await getResponse(`/api/orders/${orderId}/financial/`)
+    if (!isCurrent()) return
+    if (!response.ok) {
+      throw new Error(evidenceApiError(response.data, 'No fue posible cargar el resumen financiero.'))
+    }
+    financial.value = response.data
+    syncFinancialForm(response.data)
+  } catch (err) {
+    if (isCurrent()) {
+      financial.value = null
+      financialError.value = err?.message || 'Error al consultar el resumen financiero.'
+    }
+  } finally {
+    if (isCurrent()) financialLoading.value = false
+  }
+}
+
+async function refreshPartsAndFinancial() {
+  await Promise.allSettled([
+    loadOrderParts(),
+    ...(canViewFinancial ? [loadFinancial()] : []),
+  ])
+}
+
+async function saveFinancial() {
+  if (!order.value || !canEditFinancial || financialSaving.value || financialLoading.value || !financial.value) return
+  financialFormError.value = ''
+  financialSuccess.value = ''
+
+  // Evitamos convertir importes a Number antes de enviarlos: Django utiliza Decimal.
+  // DecimalField(max_digits=12, decimal_places=2): hasta 10 dígitos enteros.
+  const amountPattern = /^\d{1,10}(?:\.\d{1,2})?$/
+  const priceText = String(financialForm.value.price_charged ?? '').trim()
+  const laborText = String(financialForm.value.labor_cost ?? '').trim()
+  const otherText = String(financialForm.value.other_direct_cost ?? '').trim()
+  if (priceText !== '' && !amountPattern.test(priceText)) {
+    financialFormError.value = 'El precio debe ser no negativo, con hasta 10 dígitos enteros y 2 decimales.'
+    return
+  }
+  if (!amountPattern.test(laborText) || !amountPattern.test(otherText)) {
+    financialFormError.value = 'Los costos deben ser no negativos, con hasta 10 dígitos enteros y 2 decimales.'
+    return
+  }
+
+  const sequence = loadSequence
+  const orderId = order.value.id
+  financialSaving.value = true
+  try {
+    const response = await authenticatedFetch(`/api/orders/${orderId}/financial/`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        price_charged: priceText === '' ? null : priceText,
+        labor_cost: laborText,
+        other_direct_cost: otherText,
+        notes: String(financialForm.value.notes ?? '').trim(),
+      }),
+    })
+    const data = await response.json().catch(() => null)
+    if (sequence !== loadSequence) return
+    if (!response.ok) {
+      throw new Error(evidenceApiError(data, 'No fue posible guardar los datos financieros.'))
+    }
+    financial.value = data
+    financialError.value = ''
+    syncFinancialForm(data)
+    financialSuccess.value = 'Datos financieros guardados y margen recalculado correctamente.'
+  } catch (err) {
+    if (sequence === loadSequence) {
+      financialFormError.value = err?.message || 'Error al guardar los datos financieros.'
+    }
+  } finally {
+    if (sequence === loadSequence) financialSaving.value = false
+  }
+}
+
 function formatMoney(value) {
   return new Intl.NumberFormat('es-CL', {
     style: 'currency',
     currency: 'CLP',
-    maximumFractionDigits: 0,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
   }).format(Number(value) || 0)
 }
 
@@ -221,6 +346,7 @@ async function registerOrderPart() {
     orderPartSuccess.value = 'Repuesto asociado a la orden y stock actualizado correctamente.'
     // Refrescar el listado y el stock actual desde PostgreSQL.
     await loadOrderParts()
+    if (sequence === loadSequence && canViewFinancial) await loadFinancial()
   } catch (err) {
     if (sequence === loadSequence) {
       orderPartFormError.value = err?.message || 'Error al registrar el repuesto utilizado.'
@@ -333,7 +459,7 @@ function selectTab(key) {
   tab.value = key
   if (key === 'evidencias' && order.value) loadEvidences()
   if (key === 'linea' && order.value) refreshOrderTracking()
-  if (key === 'repuestos' && order.value) loadOrderParts()
+  if (key === 'repuestos' && order.value) refreshPartsAndFinancial()
 }
 
 function selectEvidenceFile(event) {
@@ -725,6 +851,7 @@ async function loadOrder() {
   techniciansLoading.value = false
   resetEvidence()
   resetOrderParts()
+  resetFinancial()
 
   order.value = null
   history.value = []
@@ -1397,7 +1524,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                 type="button"
                 class="btn btn-sm btn-outline-secondary"
                 :disabled="orderPartsLoading || orderPartSaving"
-                @click="loadOrderParts"
+                @click="refreshPartsAndFinancial"
               >
                 {{ orderPartsLoading ? 'Actualizando...' : 'Actualizar' }}
               </button>
@@ -1441,7 +1568,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                 <tfoot>
                   <tr class="fw-bold">
                     <td colspan="3" class="text-end">Total de repuestos</td>
-                    <td class="text-end">{{ formatMoney(usedPartsTotal) }}</td>
+                    <td class="text-end">{{ formatMoney(financial?.parts_cost ?? usedPartsTotal) }}</td>
                   </tr>
                 </tfoot>
               </table>
@@ -1529,6 +1656,145 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                   {{ orderPartSaving ? 'Registrando...' : 'Registrar uso y descontar stock' }}
                 </button>
               </form>
+            </template>
+          </div>
+        </div>
+
+        <!-- HU-14: costos directos y margen calculados por el backend. -->
+        <div class="col-12">
+          <div class="mc-card p-4">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+              <h5 class="mb-0">Costos, precio y margen estimado</h5>
+              <button
+                v-if="canViewFinancial"
+                type="button"
+                class="btn btn-sm btn-outline-secondary"
+                :disabled="financialLoading || financialSaving"
+                @click="loadFinancial"
+              >
+                {{ financialLoading ? 'Actualizando...' : 'Actualizar cálculo' }}
+              </button>
+            </div>
+            <div v-if="!canViewFinancial" class="alert alert-info mb-0" role="status">
+              Tu perfil puede consultar los repuestos, pero no la información financiera de la orden.
+            </div>
+            <template v-else>
+              <div v-if="financialError" class="alert alert-danger" role="alert">{{ financialError }}</div>
+              <div v-if="financialLoading" class="text-muted">Cargando resumen financiero...</div>
+              <template v-else-if="financial">
+                <div v-if="!financial.has_financial_record" class="alert alert-info small" role="status">
+                  Aún no hay un registro financiero. El costo de los repuestos se calcula igualmente desde sus usos históricos.
+                </div>
+
+                <div class="row g-3 mb-3">
+                  <div class="col-md-4 col-lg-3">
+                    <div class="small text-muted">Precio cobrado</div>
+                    <div class="fs-5 fw-semibold">{{ financial.price_charged === null ? 'Pendiente' : formatMoney(financial.price_charged) }}</div>
+                  </div>
+                  <div class="col-md-4 col-lg-3">
+                    <div class="small text-muted">Repuestos (HU-13)</div>
+                    <div class="fs-5 fw-semibold">{{ formatMoney(financial.parts_cost) }}</div>
+                  </div>
+                  <div class="col-md-4 col-lg-3">
+                    <div class="small text-muted">Mano de obra</div>
+                    <div class="fs-5 fw-semibold">{{ formatMoney(financial.labor_cost) }}</div>
+                  </div>
+                  <div class="col-md-4 col-lg-3">
+                    <div class="small text-muted">Otros costos directos</div>
+                    <div class="fs-5 fw-semibold">{{ formatMoney(financial.other_direct_cost) }}</div>
+                  </div>
+                  <div class="col-md-4 col-lg-4">
+                    <div class="small text-muted">Costo directo total</div>
+                    <div class="fs-5 fw-semibold">{{ formatMoney(financial.total_direct_cost) }}</div>
+                  </div>
+                  <div class="col-md-4 col-lg-4">
+                    <div class="small text-muted">Margen estimado</div>
+                    <div class="fs-5 fw-semibold" :class="{ 'text-danger': financial.estimated_margin !== null && Number(financial.estimated_margin) < 0 }">
+                      {{ financial.estimated_margin === null ? 'Pendiente de precio' : formatMoney(financial.estimated_margin) }}
+                    </div>
+                  </div>
+                  <div class="col-md-4 col-lg-4">
+                    <div class="small text-muted">Margen estimado (%)</div>
+                    <div class="fs-5 fw-semibold">
+                      {{ financial.estimated_margin_percent !== null ? `${financial.estimated_margin_percent} %` : (financial.price_charged === null ? 'Pendiente' : 'No calculable con precio $0') }}
+                    </div>
+                  </div>
+                </div>
+                <p class="small text-muted mb-0">
+                  Costo directo total = repuestos + mano de obra + otros costos directos.
+                  Margen estimado = precio cobrado − costo directo total. El porcentaje se calcula solo si el precio es mayor que cero.
+                  Los resultados proceden de Django y el costo de repuestos no se registra nuevamente aquí.
+                </p>
+
+                <hr class="my-4">
+                <div v-if="financialSuccess" class="alert alert-success" role="status">{{ financialSuccess }}</div>
+                <div v-if="financialFormError" class="alert alert-danger" role="alert">{{ financialFormError }}</div>
+                <div v-if="canEditFinancial">
+                  <h6 class="mb-3">Registrar o modificar datos financieros</h6>
+                  <form @submit.prevent="saveFinancial">
+                    <div class="row g-3">
+                      <div class="col-md-4">
+                        <label for="financial-price" class="form-label">Precio cobrado (CLP)</label>
+                        <input
+                          id="financial-price"
+                          v-model="financialForm.price_charged"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          class="form-control"
+                          placeholder="Dejar vacío si está pendiente"
+                          :disabled="financialSaving"
+                        >
+                        <div class="form-text">Déjalo vacío si todavía no hay un precio definido. Un valor de 0 es distinto de pendiente.</div>
+                      </div>
+                      <div class="col-md-4">
+                        <label for="financial-labor" class="form-label">Costo de mano de obra (CLP)</label>
+                        <input
+                          id="financial-labor"
+                          v-model="financialForm.labor_cost"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          class="form-control"
+                          :disabled="financialSaving"
+                          required
+                        >
+                      </div>
+                      <div class="col-md-4">
+                        <label for="financial-other" class="form-label">Otros costos directos (CLP)</label>
+                        <input
+                          id="financial-other"
+                          v-model="financialForm.other_direct_cost"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          class="form-control"
+                          :disabled="financialSaving"
+                          required
+                        >
+                      </div>
+                      <div class="col-12">
+                        <label for="financial-notes" class="form-label">Observaciones financieras (opcional)</label>
+                        <textarea
+                          id="financial-notes"
+                          v-model="financialForm.notes"
+                          class="form-control"
+                          rows="2"
+                          :disabled="financialSaving"
+                          placeholder="Ej.: Precio acordado al aprobar el presupuesto."
+                        ></textarea>
+                      </div>
+                      <div class="col-12">
+                        <button type="submit" class="btn btn-primary" :disabled="financialSaving || financialLoading">
+                          <span v-if="financialSaving" class="spinner-border spinner-border-sm me-2"></span>
+                          {{ financialSaving ? 'Guardando...' : 'Guardar datos financieros' }}
+                        </button>
+                      </div>
+                    </div>
+                  </form>
+                </div>
+                <p v-else class="small text-muted mb-0">Solo un administrador puede modificar los datos financieros.</p>
+              </template>
             </template>
           </div>
         </div>
