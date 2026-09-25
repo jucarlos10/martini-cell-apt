@@ -748,3 +748,72 @@ class OrderWarrantyHistory(models.Model):
             f"Garantía {self.warranty_id} - "
             f"revisión {self.revision}"
         )
+# HU-16: Evaluación manual que alimenta el índice de viabilidad.
+class OrderViabilityAssessment(models.Model):
+    class Difficulty(models.TextChoices):
+        LOW = "LOW", "Baja"
+        MEDIUM = "MEDIUM", "Media"
+        HIGH = "HIGH", "Alta"
+
+    class WarrantyRisk(models.TextChoices):
+        LOW = "LOW", "Bajo"
+        MEDIUM = "MEDIUM", "Medio"
+        HIGH = "HIGH", "Alto"
+
+    order = models.OneToOneField(
+        ServiceOrder,
+        on_delete=models.PROTECT,
+        related_name="viability_assessment",
+    )
+
+    # La dificultad se registra explícitamente por el técnico.
+    # No se infiere automáticamente desde el diagnóstico.
+    difficulty = models.CharField(
+        max_length=10,
+        choices=Difficulty.choices,
+    )
+
+    # El riesgo de garantía también corresponde a una
+    # evaluación profesional explícita.
+    warranty_risk = models.CharField(
+        max_length=10,
+        choices=WarrantyRisk.choices,
+    )
+
+    notes = models.TextField(
+        blank=True,
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="viability_assessments_created",
+    )
+
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="viability_assessments_updated",
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"Viabilidad - "
+            f"{self.order.tracking_code}"
+        )
