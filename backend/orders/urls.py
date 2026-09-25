@@ -1,7 +1,7 @@
-
 from django.urls import path
 
 from .financial_views import OrderFinancialView
+from .indicator_views import OperationalIndicatorsView
 from .public_tracking import PublicOrderStatusView
 from .views import (
     OrderEvidenceDownloadView,
@@ -14,6 +14,7 @@ from .views import (
     ServiceOrderDetailView,
     ServiceOrderListCreateView,
 )
+from .viability_views import OrderViabilityView
 from .warranty_views import (
     OrderWarrantyDetailView,
     OrderWarrantyHistoryView,
@@ -32,6 +33,14 @@ urlpatterns = [
         PublicOrderStatusView.as_view(),
         name="public-order-status",
     ),
+
+    # HU-16: Indicadores operacionales.
+    path(
+        "indicators/",
+        OperationalIndicatorsView.as_view(),
+        name="operational-indicators",
+    ),
+
     path(
         "<int:pk>/",
         ServiceOrderDetailView.as_view(),
@@ -75,6 +84,13 @@ urlpatterns = [
         "<int:pk>/warranties/<int:warranty_id>/history/",
         OrderWarrantyHistoryView.as_view(),
         name="order-warranty-history",
+    ),
+
+    # HU-16: Evaluación e índice de viabilidad.
+    path(
+        "<int:pk>/viability/",
+        OrderViabilityView.as_view(),
+        name="order-viability",
     ),
 
     path(

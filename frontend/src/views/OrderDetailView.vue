@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 import AdminLayout from '../layouts/AdminLayout.vue'
@@ -16,6 +16,8 @@ const canViewFinancial = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canEditFinancial = currentUser?.role === 'ADMIN'
 const canViewWarranties = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canManageWarranties = ['ADMIN', 'TECH'].includes(currentUser?.role)
+const canViewViability = ['ADMIN', 'TECH'].includes(currentUser?.role)
+const canManageViability = ['ADMIN', 'TECH'].includes(currentUser?.role)
 
 const order = ref(null)
 const history = ref([])
@@ -499,6 +501,304 @@ async function saveWarranty() {
   }
 }
 
+
+// HU-16: evaluación manual e índice de viabilidad calculado por Django.
+const viability = ref(null)
+const viabilityLoading = ref(false)
+const viabilityError = ref('')
+const viabilitySaving = ref(false)
+const viabilityFormError = ref('')
+const viabilitySuccess = ref('')
+let viabilityRequestId = 0
+
+const emptyViabilityForm = () => ({
+  difficulty: '',
+  warranty_risk: '',
+  notes: '',
+})
+
+const viabilityForm = ref(emptyViabilityForm())
+
+const viabilityMissingLabels = {
+  difficulty: 'Dificultad técnica',
+  warranty_risk: 'Riesgo de garantía',
+  margin: 'Margen estimado',
+  time: 'Tiempo técnico',
+  parts: 'Disponibilidad de repuestos',
+}
+
+const viabilitySaveLabel = computed(() => {
+  if (viabilitySaving.value) return 'Guardando...'
+  return viability.value?.assessment
+    ? 'Guardar y recalcular'
+    : 'Registrar evaluación y calcular'
+})
+
+function resetViability() {
+  ++viabilityRequestId
+  viability.value = null
+  viabilityLoading.value = false
+  viabilityError.value = ''
+  viabilitySaving.value = false
+  viabilityFormError.value = ''
+  viabilitySuccess.value = ''
+  viabilityForm.value = emptyViabilityForm()
+}
+
+function syncViabilityForm(data) {
+  const assessment = data?.assessment
+
+  if (!assessment) {
+    viabilityForm.value = emptyViabilityForm()
+    return
+  }
+
+  viabilityForm.value = {
+    difficulty: assessment.difficulty || '',
+    warranty_risk: assessment.warranty_risk || '',
+    notes: assessment.notes || '',
+  }
+}
+
+function viabilityLevelClass(level) {
+  if (level === 'HIGH') return 'bg-success'
+  if (level === 'MEDIUM') return 'bg-warning text-dark'
+  if (level === 'LOW') return 'bg-danger'
+  return 'bg-secondary'
+}
+
+function viabilityFactorWidth(factor) {
+  if (factor?.score === null || factor?.score === undefined) return '0%'
+
+  const maxScore = Number(factor.max_score || 0)
+
+  if (!maxScore) return '0%'
+
+  const percentage = (
+    Number(factor.score) / maxScore
+  ) * 100
+
+  return `${Math.max(0, Math.min(100, percentage))}%`
+}
+
+function viabilityMissingLabel(key) {
+  return viabilityMissingLabels[key] || key
+}
+
+function viabilityMissingActionLabel(key) {
+  if (key === 'difficulty' || key === 'warranty_risk') {
+    return 'Completar'
+  }
+
+  if (key === 'margin') {
+    return canEditFinancial
+      ? 'Completar datos financieros'
+      : 'Revisar datos financieros'
+  }
+
+  if (key === 'parts') {
+    return 'Ir a repuestos'
+  }
+
+  if (key === 'time') {
+    return 'Revisar línea de tiempo'
+  }
+
+  return 'Revisar'
+}
+
+async function focusElement(elementId) {
+  await nextTick()
+
+  const element = document.getElementById(elementId)
+
+  if (!element) return
+
+  element.scrollIntoView({
+    behavior: 'smooth',
+    block: 'center',
+  })
+
+  window.setTimeout(() => {
+    element.focus({
+      preventScroll: true,
+    })
+  }, 350)
+}
+
+async function goToViabilityMissingFactor(key) {
+  viabilityFormError.value = ''
+  viabilitySuccess.value = ''
+
+  if (key === 'difficulty') {
+    await focusElement('viability-difficulty')
+    return
+  }
+
+  if (key === 'warranty_risk') {
+    await focusElement('viability-warranty-risk')
+    return
+  }
+
+  if (key === 'margin') {
+    tab.value = 'repuestos'
+
+    await refreshPartsAndFinancial()
+    await nextTick()
+
+    if (canEditFinancial) {
+      await focusElement('financial-price')
+    }
+
+    return
+  }
+
+  if (key === 'parts') {
+    tab.value = 'repuestos'
+
+    await loadOrderParts()
+    await focusElement('order-part-select')
+    return
+  }
+
+  if (key === 'time') {
+    tab.value = 'linea'
+
+    await refreshOrderTracking()
+    await nextTick()
+
+    document.querySelector('.section-tabs')?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    })
+  }
+}
+
+async function loadViability() {
+  if (!order.value || !canViewViability) return
+
+  const orderId = order.value.id
+  const sequence = loadSequence
+  const requestId = ++viabilityRequestId
+  const isCurrent = () => (
+    sequence === loadSequence
+    && requestId === viabilityRequestId
+  )
+
+  viabilityLoading.value = true
+  viabilityError.value = ''
+  viabilitySuccess.value = ''
+
+  try {
+    const response = await getResponse(
+      `/api/orders/${orderId}/viability/`
+    )
+
+    if (!isCurrent()) return
+
+    if (!response.ok) {
+      throw new Error(
+        evidenceApiError(
+          response.data,
+          'No fue posible consultar el índice de viabilidad.'
+        )
+      )
+    }
+
+    viability.value = response.data
+    syncViabilityForm(response.data)
+  } catch (err) {
+    if (isCurrent()) {
+      viability.value = null
+      viabilityError.value = (
+        err?.message
+        || 'Error al consultar el índice de viabilidad.'
+      )
+    }
+  } finally {
+    if (isCurrent()) viabilityLoading.value = false
+  }
+}
+
+async function saveViability() {
+  if (
+    !order.value
+    || !canManageViability
+    || viabilitySaving.value
+    || viabilityLoading.value
+  ) {
+    return
+  }
+
+  viabilityFormError.value = ''
+  viabilitySuccess.value = ''
+
+  const difficulty = viabilityForm.value.difficulty
+  const warrantyRisk = viabilityForm.value.warranty_risk
+
+  if (!['LOW', 'MEDIUM', 'HIGH'].includes(difficulty)) {
+    viabilityFormError.value = 'Selecciona la dificultad técnica.'
+    return
+  }
+
+  if (!['LOW', 'MEDIUM', 'HIGH'].includes(warrantyRisk)) {
+    viabilityFormError.value = 'Selecciona el riesgo de garantía.'
+    return
+  }
+
+  const orderId = order.value.id
+  const sequence = loadSequence
+  viabilitySaving.value = true
+
+  try {
+    const response = await authenticatedFetch(
+      `/api/orders/${orderId}/viability/`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          difficulty,
+          warranty_risk: warrantyRisk,
+          notes: String(
+            viabilityForm.value.notes ?? ''
+          ).trim(),
+        }),
+      }
+    )
+
+    const data = await response.json().catch(() => null)
+
+    if (sequence !== loadSequence) return
+
+    if (!response.ok) {
+      throw new Error(
+        evidenceApiError(
+          data,
+          'No fue posible guardar la evaluación de viabilidad.'
+        )
+      )
+    }
+
+    viability.value = data
+    viabilityError.value = ''
+    syncViabilityForm(data)
+    viabilitySuccess.value = (
+      'Evaluación guardada e índice recalculado correctamente.'
+    )
+  } catch (err) {
+    if (sequence === loadSequence) {
+      viabilityFormError.value = (
+        err?.message
+        || 'Error al guardar la evaluación de viabilidad.'
+      )
+    }
+  } finally {
+    if (sequence === loadSequence) viabilitySaving.value = false
+  }
+}
+
 function formatMoney(value) {
   return new Intl.NumberFormat('es-CL', {
     style: 'currency',
@@ -633,7 +933,7 @@ const tabs = [
   { key: 'evidencias', label: 'Evidencias', enabled: true },
   { key: 'repuestos', label: 'Repuestos y costos', enabled: true },
   { key: 'garantia', label: 'Garantías', enabled: true },
-  { key: 'viabilidad', label: 'Índice de viabilidad', enabled: false },
+  { key: 'viabilidad', label: 'Índice de viabilidad', enabled: true },
 ]
 
 function formatDate(value) {
@@ -729,6 +1029,9 @@ function selectTab(key) {
   if (key === 'repuestos' && order.value) refreshPartsAndFinancial()
   if (key === 'garantia' && order.value && canViewWarranties) {
     Promise.allSettled([loadWarranties(), loadOrderParts()])
+  }
+  if (key === 'viabilidad' && order.value && canViewViability) {
+    loadViability()
   }
 }
 
@@ -833,6 +1136,7 @@ async function toggleEvidenceImage(item) {
 
 onBeforeUnmount(() => {
   ++evidenceRequestId
+  ++viabilityRequestId
   releaseImageUrls()
 })
 
@@ -1123,6 +1427,7 @@ async function loadOrder() {
   resetOrderParts()
   resetFinancial()
   resetWarranties()
+  resetViability()
 
   order.value = null
   history.value = []
@@ -2280,6 +2585,299 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        </template>
+      </section>
+
+      <!-- HU-16: índice de viabilidad explicable y evaluación profesional. -->
+      <section v-if="tab === 'viabilidad'" class="row g-3">
+        <div v-if="!canViewViability" class="col-12">
+          <div class="alert alert-info" role="status">
+            Tu perfil no tiene permiso para consultar el índice de viabilidad.
+          </div>
+        </div>
+
+        <template v-else>
+          <div class="col-lg-7">
+            <div class="mc-card p-4 h-100">
+              <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                <div>
+                  <h5 class="mb-1">Índice de viabilidad</h5>
+                  <div class="small text-muted">
+                    Reglas {{ viability?.rule_version || 'HU16-v1' }} · resultado calculado en Django
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-secondary"
+                  :disabled="viabilityLoading || viabilitySaving"
+                  @click="loadViability"
+                >
+                  {{ viabilityLoading ? 'Actualizando...' : 'Recalcular' }}
+                </button>
+              </div>
+
+              <div
+                v-if="viabilityError"
+                class="alert alert-danger"
+                role="alert"
+              >
+                {{ viabilityError }}
+              </div>
+
+              <div
+                v-if="viabilityLoading && !viability"
+                class="text-muted"
+              >
+                Calculando índice de viabilidad...
+              </div>
+
+              <template v-else-if="viability">
+                <div class="row g-3 align-items-stretch mb-4">
+                  <div class="col-md-4">
+                    <div class="border rounded p-3 h-100 text-center">
+                      <template v-if="viability.is_calculable">
+                        <div class="display-6 fw-bold">
+                          {{ viability.score }}/{{ viability.max_score }}
+                        </div>
+
+                        <span
+                          class="badge mt-2"
+                          :class="viabilityLevelClass(viability.level)"
+                        >
+                          Viabilidad {{ viability.level_display }}
+                        </span>
+                      </template>
+
+                      <template v-else>
+                        <i class="bi bi-exclamation-circle fs-2 text-warning"></i>
+                        <div class="fw-semibold mt-2">
+                          Información insuficiente
+                        </div>
+                        <div class="small text-muted mt-1">
+                          Completa los factores pendientes para obtener el puntaje.
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+
+                  <div class="col-md-8">
+                    <div class="alert alert-light border h-100 mb-0">
+                      <strong>Importante</strong>
+
+                      <div class="small mt-1">
+                        {{ viability.advisory }}
+                      </div>
+
+                      <div
+                        v-if="viability.missing_factors?.length"
+                        class="small mt-3"
+                      >
+                        <strong>Factores pendientes:</strong>
+
+                        <div class="d-flex flex-column gap-2 mt-2">
+                          <button
+                            v-for="key in viability.missing_factors"
+                            :key="key"
+                            type="button"
+                            class="btn btn-sm btn-outline-primary d-flex align-items-center justify-content-between gap-3 text-start"
+                            @click="goToViabilityMissingFactor(key)"
+                          >
+                            <span>{{ viabilityMissingLabel(key) }}</span>
+
+                            <span class="text-nowrap">
+                              {{ viabilityMissingActionLabel(key) }}
+                              <i class="bi bi-arrow-right ms-1" aria-hidden="true"></i>
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <h6 class="mb-3">
+                  Factores que explican el resultado
+                </h6>
+
+                <template v-if="viability.factors?.length">
+                  <div
+                    v-for="factor in viability.factors"
+                    :key="factor.key"
+                    class="border rounded p-3 mb-3"
+                  >
+                    <div class="d-flex justify-content-between gap-3">
+                      <strong>{{ factor.label }}</strong>
+
+                      <span
+                        v-if="factor.score !== null && factor.score !== undefined"
+                        class="fw-semibold"
+                      >
+                        {{ factor.score }}/{{ factor.max_score }}
+                      </span>
+
+                      <span v-else class="badge bg-secondary">
+                        Pendiente
+                      </span>
+                    </div>
+
+                    <div class="bar-track mt-2">
+                      <div
+                        class="bar-fill"
+                        :style="{ width: viabilityFactorWidth(factor) }"
+                      ></div>
+                    </div>
+
+                    <div class="small text-muted mt-2">
+                      {{ factor.explanation }}
+                    </div>
+                  </div>
+                </template>
+
+                <div v-else class="alert alert-info mb-0">
+                  Registra la dificultad técnica y el riesgo de garantía
+                  para generar el detalle de factores.
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <div class="col-lg-5">
+            <div class="mc-card p-4">
+              <h5>Evaluación profesional</h5>
+
+              <p class="small text-muted">
+                La dificultad y el riesgo de garantía se registran de forma
+                explícita. El sistema no los infiere automáticamente desde
+                el diagnóstico.
+              </p>
+
+              <div
+                v-if="viabilitySuccess"
+                class="alert alert-success"
+                role="status"
+              >
+                {{ viabilitySuccess }}
+              </div>
+
+              <div
+                v-if="viabilityFormError"
+                class="alert alert-danger"
+                role="alert"
+              >
+                {{ viabilityFormError }}
+              </div>
+
+              <form
+                v-if="canManageViability"
+                @submit.prevent="saveViability"
+              >
+                <label
+                  for="viability-difficulty"
+                  class="form-label"
+                >
+                  Dificultad técnica
+                </label>
+
+                <select
+                  id="viability-difficulty"
+                  v-model="viabilityForm.difficulty"
+                  class="form-select mb-3"
+                  :disabled="viabilitySaving || viabilityLoading"
+                  required
+                >
+                  <option value="">Seleccionar...</option>
+                  <option value="LOW">Baja</option>
+                  <option value="MEDIUM">Media</option>
+                  <option value="HIGH">Alta</option>
+                </select>
+
+                <label
+                  for="viability-warranty-risk"
+                  class="form-label"
+                >
+                  Riesgo de garantía
+                </label>
+
+                <select
+                  id="viability-warranty-risk"
+                  v-model="viabilityForm.warranty_risk"
+                  class="form-select mb-3"
+                  :disabled="viabilitySaving || viabilityLoading"
+                  required
+                >
+                  <option value="">Seleccionar...</option>
+                  <option value="LOW">Bajo</option>
+                  <option value="MEDIUM">Medio</option>
+                  <option value="HIGH">Alto</option>
+                </select>
+
+                <label
+                  for="viability-notes"
+                  class="form-label"
+                >
+                  Observaciones (opcional)
+                </label>
+
+                <textarea
+                  id="viability-notes"
+                  v-model="viabilityForm.notes"
+                  class="form-control mb-3"
+                  rows="4"
+                  :disabled="viabilitySaving"
+                  placeholder="Ej.: Complejidad del desmontaje, antecedentes de la falla o riesgos observados."
+                ></textarea>
+
+                <button
+                  type="submit"
+                  class="btn btn-primary"
+                  :disabled="viabilitySaving || viabilityLoading"
+                >
+                  <span
+                    v-if="viabilitySaving"
+                    class="spinner-border spinner-border-sm me-2"
+                  ></span>
+                  {{ viabilitySaveLabel }}
+                </button>
+              </form>
+
+              <div v-else class="alert alert-secondary mb-0">
+                Tu rol permite consultar el índice, pero no modificar la evaluación.
+              </div>
+
+              <hr class="my-4">
+
+              <h6>Reglas de cálculo HU16-v1</h6>
+
+              <div class="small text-muted">
+                <ul class="mb-3 mt-2">
+                  <li>
+                    Dificultad técnica: baja 20, media 12 y alta 5 puntos.
+                  </li>
+                  <li>
+                    Repuestos: hasta 20 puntos según registro,
+                    disponibilidad de stock y estado del catálogo.
+                  </li>
+                  <li>
+                    Margen: 25 puntos desde 30%, 20 desde 15%,
+                    12 desde 0% y 0 si es negativo.
+                  </li>
+                  <li>
+                    Tiempo técnico: 20 puntos hasta 2 h, 15 hasta 6 h,
+                    8 hasta 12 h y 3 sobre 12 h.
+                  </li>
+                  <li>
+                    Riesgo de garantía: bajo 15, medio 9 y alto 3 puntos.
+                  </li>
+                </ul>
+
+                <div class="border rounded p-2">
+                  <strong>Niveles:</strong>
+                  Alta desde 75 puntos, Media desde 50 y Baja bajo 50.
+                </div>
+              </div>
             </div>
           </div>
         </template>
