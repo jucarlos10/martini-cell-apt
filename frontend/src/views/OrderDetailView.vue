@@ -14,6 +14,8 @@ const canChangeStatus = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canRegisterParts = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canViewFinancial = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canEditFinancial = currentUser?.role === 'ADMIN'
+const canViewWarranties = ['ADMIN', 'TECH'].includes(currentUser?.role)
+const canManageWarranties = ['ADMIN', 'TECH'].includes(currentUser?.role)
 
 const order = ref(null)
 const history = ref([])
@@ -232,6 +234,271 @@ async function saveFinancial() {
   }
 }
 
+// HU-15: garantías del servicio/repuestos e historial de revisiones.
+const warranties = ref([])
+const warrantyLoading = ref(false)
+const warrantyError = ref('')
+const warrantySaving = ref(false)
+const warrantyFormError = ref('')
+const warrantySuccess = ref('')
+const editingWarrantyId = ref(null)
+const warrantyHistoryById = ref({})
+const warrantyHistoryLoading = ref({})
+const warrantyHistoryErrors = ref({})
+const expandedWarrantyHistoryId = ref(null)
+let warrantyRequestId = 0
+let warrantyHistoryRequestId = 0
+let warrantyHistoryLatestById = {}
+
+const warrantyStatusLabels = {
+  ACTIVE: 'Vigente',
+  EXPIRED: 'Vencida',
+  NOT_APPLICABLE: 'No aplica',
+  NOT_STARTED: 'Aún no inicia',
+}
+
+const serviceWarrantyExists = computed(() =>
+  warranties.value.some((item) => item.warranty_type === 'SERVICE')
+)
+const availableWarrantyParts = computed(() =>
+  usedParts.value.filter((usage) =>
+    !warranties.value.some((warranty) => Number(warranty.order_part) === Number(usage.id))
+  )
+)
+const emptyWarrantyForm = (type = 'SERVICE') => ({
+  warranty_type: type,
+  order_part: '',
+  is_applicable: true,
+  starts_on: '',
+  ends_on: '',
+  conditions: '',
+  change_note: '',
+})
+const warrantyForm = ref(emptyWarrantyForm())
+const selectedWarrantyPart = computed(() =>
+  usedParts.value.find((item) => Number(item.id) === Number(warrantyForm.value.order_part)) || null
+)
+
+function resetWarranties() {
+  ++warrantyRequestId
+  ++warrantyHistoryRequestId
+  warrantyHistoryLatestById = {}
+  warranties.value = []
+  warrantyLoading.value = false
+  warrantyError.value = ''
+  warrantySaving.value = false
+  warrantyFormError.value = ''
+  warrantySuccess.value = ''
+  editingWarrantyId.value = null
+  warrantyForm.value = emptyWarrantyForm()
+  warrantyHistoryById.value = {}
+  warrantyHistoryLoading.value = {}
+  warrantyHistoryErrors.value = {}
+  expandedWarrantyHistoryId.value = null
+}
+
+function resetWarrantyForm() {
+  editingWarrantyId.value = null
+  warrantyForm.value = emptyWarrantyForm(serviceWarrantyExists.value ? 'PART' : 'SERVICE')
+  warrantyFormError.value = ''
+}
+
+function startEditWarranty(item) {
+  if (!canManageWarranties) return
+  editingWarrantyId.value = item.id
+  warrantyForm.value = {
+    warranty_type: item.warranty_type,
+    order_part: item.order_part ?? '',
+    is_applicable: item.is_applicable,
+    starts_on: item.starts_on ?? '',
+    ends_on: item.ends_on ?? '',
+    conditions: item.conditions ?? '',
+    change_note: '',
+  }
+  warrantyFormError.value = ''
+  warrantySuccess.value = ''
+}
+
+function warrantyBadgeClass(status) {
+  if (status === 'ACTIVE') return 'bg-success'
+  if (status === 'EXPIRED') return 'bg-secondary'
+  if (status === 'NOT_STARTED') return 'bg-info text-dark'
+  return 'bg-light text-dark border'
+}
+
+// DateField devuelve YYYY-MM-DD; no usamos UTC para evitar desplazar el día.
+function formatWarrantyDate(value) {
+  if (!value) return 'No aplica'
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : value
+}
+
+function warrantyPartDescription(id) {
+  const usage = usedParts.value.find((item) => Number(item.id) === Number(id))
+  return usage ? `${usage.part_name} · ${usage.supplier_name}` : `Uso de repuesto #${id}`
+}
+
+async function loadWarranties() {
+  if (!order.value || !canViewWarranties) return
+  const orderId = order.value.id
+  const sequence = loadSequence
+  const requestId = ++warrantyRequestId
+  const isCurrent = () => sequence === loadSequence && requestId === warrantyRequestId
+  warrantyLoading.value = true
+  warrantyError.value = ''
+
+  try {
+    const response = await getResponse(`/api/orders/${orderId}/warranties/`)
+    if (!isCurrent()) return
+    if (!response.ok) {
+      throw new Error(evidenceApiError(response.data, 'No fue posible consultar las garantías.'))
+    }
+    const data = response.data
+    warranties.value = Array.isArray(data) ? data : (data?.results || [])
+    if (editingWarrantyId.value === null && serviceWarrantyExists.value && warrantyForm.value.warranty_type === 'SERVICE') {
+      warrantyForm.value.warranty_type = 'PART'
+    }
+  } catch (err) {
+    if (isCurrent()) {
+      warranties.value = []
+      warrantyError.value = err?.message || 'Error al cargar las garantías.'
+    }
+  } finally {
+    if (isCurrent()) warrantyLoading.value = false
+  }
+}
+
+async function loadWarrantyHistory(warrantyId) {
+  if (!order.value || !canViewWarranties) return
+  const orderId = order.value.id
+  const sequence = loadSequence
+  const requestId = ++warrantyHistoryRequestId
+  warrantyHistoryLatestById[warrantyId] = requestId
+  const isCurrent = () => sequence === loadSequence && warrantyHistoryLatestById[warrantyId] === requestId
+  warrantyHistoryLoading.value = { ...warrantyHistoryLoading.value, [warrantyId]: true }
+  warrantyHistoryErrors.value = { ...warrantyHistoryErrors.value, [warrantyId]: '' }
+
+  try {
+    const response = await getResponse(`/api/orders/${orderId}/warranties/${warrantyId}/history/`)
+    if (!isCurrent()) return
+    if (!response.ok) {
+      throw new Error(evidenceApiError(response.data, 'No fue posible consultar las revisiones.'))
+    }
+    const data = response.data
+    warrantyHistoryById.value = {
+      ...warrantyHistoryById.value,
+      [warrantyId]: Array.isArray(data) ? data : (data?.results || []),
+    }
+  } catch (err) {
+    if (isCurrent()) {
+      warrantyHistoryErrors.value = {
+        ...warrantyHistoryErrors.value,
+        [warrantyId]: err?.message || 'Error al cargar las revisiones.',
+      }
+    }
+  } finally {
+    if (isCurrent()) {
+      warrantyHistoryLoading.value = { ...warrantyHistoryLoading.value, [warrantyId]: false }
+    }
+  }
+}
+
+async function toggleWarrantyHistory(warrantyId) {
+  if (expandedWarrantyHistoryId.value === warrantyId) {
+    expandedWarrantyHistoryId.value = null
+    return
+  }
+  expandedWarrantyHistoryId.value = warrantyId
+  await loadWarrantyHistory(warrantyId)
+}
+
+async function saveWarranty() {
+  if (!order.value || !canManageWarranties || warrantySaving.value || warrantyLoading.value) return
+  warrantyFormError.value = ''
+  warrantySuccess.value = ''
+
+  const form = warrantyForm.value
+  const editing = editingWarrantyId.value !== null
+  const conditions = String(form.conditions ?? '').trim()
+  const changeNote = String(form.change_note ?? '').trim()
+  const partId = Number(form.order_part)
+
+  if (!editing && form.warranty_type === 'SERVICE' && serviceWarrantyExists.value) {
+    warrantyFormError.value = 'Esta orden ya tiene garantía del servicio. Selecciona Modificar en su registro.'
+    return
+  }
+  if (!editing && form.warranty_type === 'PART' &&
+      (!partId || !availableWarrantyParts.value.some((item) => Number(item.id) === partId))) {
+    warrantyFormError.value = 'Selecciona un repuesto utilizado en esta orden y sin garantía registrada.'
+    return
+  }
+  if (form.is_applicable) {
+    if (!form.starts_on || !form.ends_on) {
+      warrantyFormError.value = 'Completa las fechas de inicio y término.'
+      return
+    }
+    if (form.ends_on < form.starts_on) {
+      warrantyFormError.value = 'La fecha de término no puede ser anterior a la de inicio.'
+      return
+    }
+    if (!conditions) {
+      warrantyFormError.value = 'Indica las condiciones de la garantía.'
+      return
+    }
+  }
+  if (editing && !changeNote) {
+    warrantyFormError.value = 'Indica el motivo de la modificación para conservar la trazabilidad.'
+    return
+  }
+
+  const orderId = order.value.id
+  const sequence = loadSequence
+  const payload = {
+    is_applicable: Boolean(form.is_applicable),
+    starts_on: form.is_applicable ? form.starts_on : null,
+    ends_on: form.is_applicable ? form.ends_on : null,
+    conditions,
+  }
+  if (editing) {
+    payload.change_note = changeNote
+  } else {
+    payload.warranty_type = form.warranty_type
+    payload.order_part = form.warranty_type === 'PART' ? partId : null
+  }
+
+  warrantySaving.value = true
+  try {
+    const url = editing
+      ? `/api/orders/${orderId}/warranties/${editingWarrantyId.value}/`
+      : `/api/orders/${orderId}/warranties/`
+    const response = await authenticatedFetch(url, {
+      method: editing ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    const data = await response.json().catch(() => null)
+    if (sequence !== loadSequence) return
+    if (!response.ok) {
+      throw new Error(evidenceApiError(data, 'No fue posible guardar la garantía.'))
+    }
+
+    await loadWarranties()
+    if (sequence !== loadSequence) return
+    resetWarrantyForm()
+    warrantySuccess.value = editing
+      ? 'Garantía actualizada y nueva revisión registrada.'
+      : 'Garantía registrada con su primera revisión.'
+    expandedWarrantyHistoryId.value = data.id
+    await loadWarrantyHistory(data.id)
+  } catch (err) {
+    if (sequence === loadSequence) {
+      warrantyFormError.value = err?.message || 'Error al guardar la garantía.'
+    }
+  } finally {
+    if (sequence === loadSequence) warrantySaving.value = false
+  }
+}
+
 function formatMoney(value) {
   return new Intl.NumberFormat('es-CL', {
     style: 'currency',
@@ -365,7 +632,7 @@ const tabs = [
   { key: 'linea', label: 'Línea de tiempo', enabled: true },
   { key: 'evidencias', label: 'Evidencias', enabled: true },
   { key: 'repuestos', label: 'Repuestos y costos', enabled: true },
-  { key: 'garantia', label: 'Garantía', enabled: false },
+  { key: 'garantia', label: 'Garantías', enabled: true },
   { key: 'viabilidad', label: 'Índice de viabilidad', enabled: false },
 ]
 
@@ -460,6 +727,9 @@ function selectTab(key) {
   if (key === 'evidencias' && order.value) loadEvidences()
   if (key === 'linea' && order.value) refreshOrderTracking()
   if (key === 'repuestos' && order.value) refreshPartsAndFinancial()
+  if (key === 'garantia' && order.value && canViewWarranties) {
+    Promise.allSettled([loadWarranties(), loadOrderParts()])
+  }
 }
 
 function selectEvidenceFile(event) {
@@ -852,6 +1122,7 @@ async function loadOrder() {
   resetEvidence()
   resetOrderParts()
   resetFinancial()
+  resetWarranties()
 
   order.value = null
   history.value = []
@@ -1798,6 +2069,220 @@ watch(() => route.params.id, loadOrder, { immediate: true })
             </template>
           </div>
         </div>
+      </section>
+
+      <!-- HU-15: garantías del servicio/repuestos y trazabilidad de revisiones. -->
+      <section v-if="tab === 'garantia'" class="row g-3">
+        <div v-if="!canViewWarranties" class="col-12">
+          <div class="alert alert-info" role="status">
+            Tu perfil no tiene permiso para consultar las garantías de esta orden.
+          </div>
+        </div>
+        <template v-else>
+          <div class="col-lg-7">
+            <div class="mc-card p-4">
+              <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                <h5 class="mb-0">Garantías registradas</h5>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-secondary"
+                  :disabled="warrantyLoading || warrantySaving"
+                  @click="loadWarranties"
+                >
+                  {{ warrantyLoading ? 'Actualizando...' : 'Actualizar' }}
+                </button>
+              </div>
+              <p class="small text-muted">
+                Garantías de la orden #{{ order.id }} · {{ order.tracking_code }}.
+                La vigencia se calcula a partir de las fechas registradas.
+              </p>
+              <div v-if="warrantyError" class="alert alert-danger" role="alert">
+                {{ warrantyError }}
+              </div>
+              <div v-if="warrantyLoading" class="text-muted">Cargando garantías...</div>
+              <div v-else-if="!warrantyError && !warranties.length" class="alert alert-info mb-0" role="status">
+                Esta orden todavía no tiene garantías registradas.
+              </div>
+              <div v-else class="d-flex flex-column gap-3">
+                <div v-for="item in warranties" :key="item.id" class="border rounded p-3">
+                  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                    <strong>{{ item.warranty_type_display || (item.warranty_type === 'SERVICE' ? 'Garantía del servicio' : 'Garantía de repuesto') }} #{{ item.id }}</strong>
+                    <span class="badge" :class="warrantyBadgeClass(item.status)">
+                      {{ warrantyStatusLabels[item.status] || item.status }}
+                    </span>
+                  </div>
+                  <div v-if="item.warranty_type === 'PART'" class="small mt-2">
+                    <strong>Repuesto:</strong> {{ item.part_name || warrantyPartDescription(item.order_part) }}
+                    <div><strong>Proveedor de la operación:</strong> {{ item.supplier_name || 'No disponible' }}</div>
+                    <div class="text-muted">Uso registrado #{{ item.order_part }}</div>
+                  </div>
+                  <div class="row g-2 small mt-2">
+                    <div class="col-sm-6"><strong>Inicio:</strong> {{ formatWarrantyDate(item.starts_on) }}</div>
+                    <div class="col-sm-6"><strong>Término:</strong> {{ formatWarrantyDate(item.ends_on) }}</div>
+                  </div>
+                  <div class="small mt-2" style="white-space: pre-wrap;"><strong>Condiciones:</strong> {{ item.conditions || 'Sin condiciones registradas' }}</div>
+                  <div class="small text-muted mt-2">Actualizada: {{ formatDate(item.updated_at) }}</div>
+                  <div class="d-flex flex-wrap gap-2 mt-3">
+                    <button
+                      v-if="canManageWarranties"
+                      type="button"
+                      class="btn btn-sm btn-outline-primary"
+                      :disabled="warrantySaving"
+                      @click="startEditWarranty(item)"
+                    >
+                      Modificar
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-outline-secondary"
+                      :disabled="!!warrantyHistoryLoading[item.id]"
+                      @click="toggleWarrantyHistory(item.id)"
+                    >
+                      {{ expandedWarrantyHistoryId === item.id ? 'Ocultar historial' : 'Ver historial' }}
+                    </button>
+                  </div>
+                  <div v-if="expandedWarrantyHistoryId === item.id" class="mt-3 border-top pt-3">
+                    <h6>Historial de revisiones</h6>
+                    <div v-if="warrantyHistoryLoading[item.id]" class="text-muted small">Cargando historial...</div>
+                    <div v-else-if="warrantyHistoryErrors[item.id]" class="alert alert-warning small" role="alert">
+                      {{ warrantyHistoryErrors[item.id] }}
+                      <button type="button" class="btn btn-sm btn-outline-secondary ms-2" @click="loadWarrantyHistory(item.id)">Reintentar</button>
+                    </div>
+                    <div v-else-if="!warrantyHistoryById[item.id]?.length" class="text-muted small">No hay revisiones disponibles.</div>
+                    <div v-else class="d-flex flex-column gap-2">
+                      <div v-for="revision in [...warrantyHistoryById[item.id]].reverse()" :key="revision.id" class="border rounded p-2 small">
+                        <div class="fw-semibold">Revisión #{{ revision.revision }} · {{ revision.action === 'CREATED' ? 'Creación' : 'Actualización' }}</div>
+                        <div class="text-muted">{{ formatDate(revision.changed_at) }} · {{ revision.changed_by_username || 'Usuario no disponible' }}</div>
+                        <div v-if="revision.order_part" class="mt-1"><strong>Repuesto:</strong> {{ warrantyPartDescription(revision.order_part) }}</div>
+                        <div class="mt-1"><strong>Aplica:</strong> {{ revision.is_applicable ? 'Sí' : 'No' }}</div>
+                        <div v-if="revision.is_applicable" class="mt-1">
+                          <strong>Vigencia:</strong> {{ formatWarrantyDate(revision.starts_on) }} al {{ formatWarrantyDate(revision.ends_on) }}
+                        </div>
+                        <div class="mt-1" style="white-space: pre-wrap;"><strong>Condiciones:</strong> {{ revision.conditions || 'Sin condiciones registradas' }}</div>
+                        <div v-if="revision.change_note" class="mt-1"><strong>Motivo del cambio:</strong> {{ revision.change_note }}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-lg-5">
+            <div class="mc-card p-4">
+              <h5>{{ editingWarrantyId !== null ? 'Modificar garantía' : 'Registrar garantía' }}</h5>
+              <p class="small text-muted">
+                La garantía del servicio se registra una vez por orden. Cada uso de repuesto puede tener
+                su propia garantía, vinculada al proveedor histórico de HU-13.
+              </p>
+              <div v-if="warrantySuccess" class="alert alert-success" role="status">{{ warrantySuccess }}</div>
+              <div v-if="warrantyFormError" class="alert alert-danger" role="alert">{{ warrantyFormError }}</div>
+              <div v-if="!canManageWarranties" class="alert alert-secondary mb-0">Tu rol permite consultar garantías, pero no modificarlas.</div>
+              <form v-else @submit.prevent="saveWarranty">
+                <label for="warranty-type" class="form-label">Tipo de garantía</label>
+                <select
+                  id="warranty-type"
+                  v-model="warrantyForm.warranty_type"
+                  class="form-select mb-3"
+                  :disabled="editingWarrantyId !== null || warrantySaving || warrantyLoading"
+                  required
+                  @change="warrantyForm.order_part = ''"
+                >
+                  <option value="SERVICE" :disabled="serviceWarrantyExists && editingWarrantyId === null">Garantía del servicio</option>
+                  <option value="PART">Garantía de repuesto</option>
+                </select>
+                <div v-if="serviceWarrantyExists && editingWarrantyId === null" class="form-text mb-3">
+                  La garantía del servicio ya está registrada. Para cambiarla, utiliza «Modificar» en su tarjeta.
+                </div>
+
+                <template v-if="warrantyForm.warranty_type === 'PART'">
+                  <label for="warranty-order-part" class="form-label">Repuesto utilizado en esta orden</label>
+                  <div v-if="editingWarrantyId !== null" class="alert alert-light border small mb-3">
+                    {{ selectedWarrantyPart ? `${selectedWarrantyPart.part_name} · ${selectedWarrantyPart.supplier_name}` : `Uso registrado #${warrantyForm.order_part}` }}
+                    <div class="text-muted">El repuesto asociado no se cambia desde este formulario.</div>
+                  </div>
+                  <template v-else>
+                    <select
+                      id="warranty-order-part"
+                      v-model="warrantyForm.order_part"
+                      class="form-select mb-2"
+                      :disabled="warrantySaving || orderPartsLoading || !!orderPartsError"
+                      required
+                    >
+                      <option value="" disabled>Seleccionar repuesto...</option>
+                      <option v-for="usage in availableWarrantyParts" :key="usage.id" :value="usage.id">
+                        {{ usage.part_name }} · {{ usage.supplier_name }} · Uso #{{ usage.id }}
+                      </option>
+                    </select>
+                    <div v-if="orderPartsLoading" class="form-text mb-2">Cargando repuestos utilizados...</div>
+                    <div v-if="orderPartsError" class="alert alert-warning small mb-2" role="alert">
+                      {{ orderPartsError }}
+                      <button type="button" class="btn btn-sm btn-outline-secondary ms-2" @click="loadOrderParts">Reintentar</button>
+                    </div>
+                    <div v-if="!orderPartsLoading && !orderPartsError && !availableWarrantyParts.length" class="alert alert-info small mb-3">
+                      No hay usos de repuestos sin garantía. Regístralos desde «Repuestos y costos».
+                    </div>
+                  </template>
+                </template>
+
+                <div class="form-check mb-3">
+                  <input
+                    id="warranty-applicable"
+                    v-model="warrantyForm.is_applicable"
+                    type="checkbox"
+                    class="form-check-input"
+                    :disabled="warrantySaving"
+                  >
+                  <label for="warranty-applicable" class="form-check-label">La garantía aplica</label>
+                </div>
+                <div v-if="warrantyForm.is_applicable" class="row g-2 mb-3">
+                  <div class="col-sm-6">
+                    <label for="warranty-start" class="form-label">Fecha de inicio</label>
+                    <input id="warranty-start" v-model="warrantyForm.starts_on" type="date" class="form-control" :disabled="warrantySaving" required>
+                  </div>
+                  <div class="col-sm-6">
+                    <label for="warranty-end" class="form-label">Fecha de término</label>
+                    <input id="warranty-end" v-model="warrantyForm.ends_on" type="date" :min="warrantyForm.starts_on || undefined" class="form-control" :disabled="warrantySaving" required>
+                  </div>
+                </div>
+                <div v-else class="alert alert-light border small mb-3">
+                  No aplica: se guardará sin fechas y se mostrará con el estado «No aplica».
+                </div>
+                <label for="warranty-conditions" class="form-label">Condiciones {{ warrantyForm.is_applicable ? '' : '(opcional)' }}</label>
+                <textarea
+                  id="warranty-conditions"
+                  v-model="warrantyForm.conditions"
+                  class="form-control mb-3"
+                  rows="3"
+                  :disabled="warrantySaving"
+                  :required="warrantyForm.is_applicable"
+                  placeholder="Ej.: Cubre fallas relacionadas con la reparación realizada."
+                ></textarea>
+                <template v-if="editingWarrantyId !== null">
+                  <label for="warranty-change-note" class="form-label">Motivo de la modificación</label>
+                  <textarea
+                    id="warranty-change-note"
+                    v-model="warrantyForm.change_note"
+                    class="form-control mb-3"
+                    rows="2"
+                    :disabled="warrantySaving"
+                    placeholder="Ej.: Corrección de fecha o condiciones."
+                    required
+                  ></textarea>
+                </template>
+                <div class="d-flex flex-wrap gap-2">
+                  <button type="submit" class="btn btn-primary" :disabled="warrantySaving || warrantyLoading || (warrantyForm.warranty_type === 'PART' && !editingWarrantyId && (orderPartsLoading || !!orderPartsError || !availableWarrantyParts.length))">
+                    <span v-if="warrantySaving" class="spinner-border spinner-border-sm me-2"></span>
+                    {{ warrantySaving ? 'Guardando...' : editingWarrantyId !== null ? 'Guardar cambios y revisión' : 'Registrar garantía' }}
+                  </button>
+                  <button v-if="editingWarrantyId !== null" type="button" class="btn btn-outline-secondary" :disabled="warrantySaving" @click="resetWarrantyForm">
+                    Cancelar edición
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </template>
       </section>
     </template>
   </AdminLayout>

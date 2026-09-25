@@ -14,6 +14,11 @@ from .views import (
     ServiceOrderDetailView,
     ServiceOrderListCreateView,
 )
+from .warranty_views import (
+    OrderWarrantyDetailView,
+    OrderWarrantyHistoryView,
+    OrderWarrantyListCreateView,
+)
 
 
 urlpatterns = [
@@ -53,6 +58,23 @@ urlpatterns = [
         "<int:pk>/financial/",
         OrderFinancialView.as_view(),
         name="order-financial",
+    ),
+
+    # HU-15: Garantías e historial de revisiones.
+    path(
+        "<int:pk>/warranties/",
+        OrderWarrantyListCreateView.as_view(),
+        name="order-warranty-list-create",
+    ),
+    path(
+        "<int:pk>/warranties/<int:warranty_id>/",
+        OrderWarrantyDetailView.as_view(),
+        name="order-warranty-detail",
+    ),
+    path(
+        "<int:pk>/warranties/<int:warranty_id>/history/",
+        OrderWarrantyHistoryView.as_view(),
+        name="order-warranty-history",
     ),
 
     path(
