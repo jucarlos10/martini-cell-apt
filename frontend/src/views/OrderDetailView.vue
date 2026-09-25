@@ -1,5 +1,5 @@
 <script setup>
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 import AdminLayout from '../layouts/AdminLayout.vue'
@@ -11,6 +11,7 @@ const route = useRoute()
 const currentUser = getCurrentUser()
 const canEditReport = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canChangeStatus = ['ADMIN', 'TECH'].includes(currentUser?.role)
+const canRegisterParts = ['ADMIN', 'TECH'].includes(currentUser?.role)
 
 const order = ref(null)
 const history = ref([])
@@ -88,6 +89,147 @@ const evidenceStages = [
 const maxEvidenceSize = 20 * 1024 * 1024
 let evidenceRequestId = 0
 
+// HU-13: repuestos reales consumidos por esta orden y catálogo disponible.
+const usedParts = ref([])
+const partCatalog = ref([])
+const orderPartsLoading = ref(false)
+const orderPartsError = ref('')
+const partCatalogError = ref('')
+const orderPartSaving = ref(false)
+const orderPartFormError = ref('')
+const orderPartSuccess = ref('')
+const emptyOrderPartForm = () => ({ part: '', quantity: 1, note: '' })
+const orderPartForm = ref(emptyOrderPartForm())
+const selectedPart = computed(() =>
+  partCatalog.value.find((item) => Number(item.id) === Number(orderPartForm.value.part)) || null
+)
+const usedPartsTotal = computed(() =>
+  usedParts.value.reduce((total, item) => total + Number(item.subtotal || 0), 0)
+)
+let orderPartsRequestId = 0
+
+function formatMoney(value) {
+  return new Intl.NumberFormat('es-CL', {
+    style: 'currency',
+    currency: 'CLP',
+    maximumFractionDigits: 0,
+  }).format(Number(value) || 0)
+}
+
+function resetOrderParts() {
+  ++orderPartsRequestId
+  usedParts.value = []
+  partCatalog.value = []
+  orderPartsLoading.value = false
+  orderPartsError.value = ''
+  partCatalogError.value = ''
+  orderPartSaving.value = false
+  orderPartFormError.value = ''
+  orderPartSuccess.value = ''
+  orderPartForm.value = emptyOrderPartForm()
+}
+
+async function loadOrderParts() {
+  if (!order.value) return
+
+  const orderId = order.value.id
+  const sequence = loadSequence
+  const requestId = ++orderPartsRequestId
+  orderPartsLoading.value = true
+  orderPartsError.value = ''
+  partCatalogError.value = ''
+
+  const isCurrent = () => sequence === loadSequence && requestId === orderPartsRequestId
+
+  try {
+    const [usageResult, catalogResult] = await Promise.allSettled([
+      getResponse(`/api/inventory/orders/${orderId}/parts/`),
+      getResponse('/api/inventory/parts/'),
+    ])
+    if (!isCurrent()) return
+
+    if (usageResult.status === 'fulfilled' && usageResult.value.ok) {
+      const data = usageResult.value.data
+      usedParts.value = Array.isArray(data) ? data : (data?.results || [])
+    } else {
+      usedParts.value = []
+      orderPartsError.value = usageResult.status === 'fulfilled'
+        ? evidenceApiError(usageResult.value.data, 'No fue posible cargar los repuestos utilizados.')
+        : (usageResult.reason?.message || 'No fue posible cargar los repuestos utilizados.')
+    }
+
+    if (catalogResult.status === 'fulfilled' && catalogResult.value.ok) {
+      const data = catalogResult.value.data
+      partCatalog.value = Array.isArray(data) ? data : (data?.results || [])
+    } else {
+      partCatalog.value = []
+      partCatalogError.value = catalogResult.status === 'fulfilled'
+        ? evidenceApiError(catalogResult.value.data, 'No fue posible cargar el catálogo de repuestos.')
+        : (catalogResult.reason?.message || 'No fue posible cargar el catálogo de repuestos.')
+    }
+  } finally {
+    if (isCurrent()) orderPartsLoading.value = false
+  }
+}
+
+async function registerOrderPart() {
+  if (!order.value || !canRegisterParts || orderPartSaving.value || orderPartsLoading.value) return
+  orderPartFormError.value = ''
+  orderPartSuccess.value = ''
+
+  if (['DELIVERED', 'CLOSED'].includes(order.value.status)) {
+    orderPartFormError.value = 'No se pueden agregar repuestos a una orden entregada o cerrada.'
+    return
+  }
+
+  const part = selectedPart.value
+  const quantity = Number(orderPartForm.value.quantity)
+  if (!part || !part.is_active) {
+    orderPartFormError.value = 'Selecciona un repuesto activo.'
+    return
+  }
+  if (!Number.isInteger(quantity) || quantity < 1) {
+    orderPartFormError.value = 'La cantidad debe ser un número entero igual o mayor que uno.'
+    return
+  }
+  if (quantity > part.stock) {
+    orderPartFormError.value = `Stock insuficiente. Disponible: ${part.stock}.`
+    return
+  }
+
+  const orderId = order.value.id
+  const sequence = loadSequence
+  orderPartSaving.value = true
+
+  try {
+    const response = await authenticatedFetch(`/api/inventory/orders/${orderId}/parts/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        part: part.id,
+        quantity,
+        note: orderPartForm.value.note.trim(),
+      }),
+    })
+    const data = await response.json().catch(() => null)
+    if (sequence !== loadSequence) return
+    if (!response.ok) {
+      throw new Error(evidenceApiError(data, 'No fue posible registrar el repuesto utilizado.'))
+    }
+
+    orderPartForm.value = emptyOrderPartForm()
+    orderPartSuccess.value = 'Repuesto asociado a la orden y stock actualizado correctamente.'
+    // Refrescar el listado y el stock actual desde PostgreSQL.
+    await loadOrderParts()
+  } catch (err) {
+    if (sequence === loadSequence) {
+      orderPartFormError.value = err?.message || 'Error al registrar el repuesto utilizado.'
+    }
+  } finally {
+    if (sequence === loadSequence) orderPartSaving.value = false
+  }
+}
+
 
 // Conservamos la estructura de pestañas del prototipo.
 // Las secciones pendientes se habilitarán al integrar sus historias.
@@ -96,7 +238,7 @@ const tabs = [
   { key: 'diagnostico', label: 'Diagnóstico', enabled: true },
   { key: 'linea', label: 'Línea de tiempo', enabled: true },
   { key: 'evidencias', label: 'Evidencias', enabled: true },
-  { key: 'repuestos', label: 'Repuestos y costos', enabled: false },
+  { key: 'repuestos', label: 'Repuestos y costos', enabled: true },
   { key: 'garantia', label: 'Garantía', enabled: false },
   { key: 'viabilidad', label: 'Índice de viabilidad', enabled: false },
 ]
@@ -191,6 +333,7 @@ function selectTab(key) {
   tab.value = key
   if (key === 'evidencias' && order.value) loadEvidences()
   if (key === 'linea' && order.value) refreshOrderTracking()
+  if (key === 'repuestos' && order.value) loadOrderParts()
 }
 
 function selectEvidenceFile(event) {
@@ -581,6 +724,7 @@ async function loadOrder() {
   techniciansError.value = ''
   techniciansLoading.value = false
   resetEvidence()
+  resetOrderParts()
 
   order.value = null
   history.value = []
@@ -1239,6 +1383,153 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                 >
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- HU-13: uso real de repuestos y costos históricos de esta orden. -->
+      <section v-if="tab === 'repuestos'" class="row g-3">
+        <div class="col-lg-7">
+          <div class="mc-card p-4">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+              <h5 class="mb-0">Repuestos utilizados</h5>
+              <button
+                type="button"
+                class="btn btn-sm btn-outline-secondary"
+                :disabled="orderPartsLoading || orderPartSaving"
+                @click="loadOrderParts"
+              >
+                {{ orderPartsLoading ? 'Actualizando...' : 'Actualizar' }}
+              </button>
+            </div>
+            <div class="small text-muted mb-3">
+              Orden #{{ order.id }} · {{ order.tracking_code }}. Los costos registrados aquí
+              se conservan aunque cambie el catálogo.
+            </div>
+            <div v-if="orderPartsError" class="alert alert-danger" role="alert">
+              {{ orderPartsError }}
+            </div>
+            <div v-if="orderPartsLoading" class="text-muted">Cargando repuestos utilizados...</div>
+            <div v-else-if="!orderPartsError && !usedParts.length" class="text-muted">
+              Esta orden todavía no tiene repuestos asociados.
+            </div>
+            <div v-else-if="usedParts.length" class="table-responsive">
+              <table class="table table-hover align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>Repuesto / proveedor</th>
+                    <th class="text-end">Cantidad</th>
+                    <th class="text-end">Costo unitario</th>
+                    <th class="text-end">Subtotal</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="item in usedParts" :key="item.id">
+                    <td>
+                      <strong>{{ item.part_name }}</strong>
+                      <div class="small text-muted">{{ item.supplier_name }}</div>
+                      <div class="small text-muted">
+                        {{ formatDate(item.created_at) }} · {{ item.created_by_username || 'Usuario no disponible' }}
+                      </div>
+                      <div v-if="item.note" class="small mt-1">{{ item.note }}</div>
+                    </td>
+                    <td class="text-end">{{ item.quantity }}</td>
+                    <td class="text-end">{{ formatMoney(item.unit_cost) }}</td>
+                    <td class="text-end">{{ formatMoney(item.subtotal) }}</td>
+                  </tr>
+                </tbody>
+                <tfoot>
+                  <tr class="fw-bold">
+                    <td colspan="3" class="text-end">Total de repuestos</td>
+                    <td class="text-end">{{ formatMoney(usedPartsTotal) }}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-lg-5">
+          <div class="mc-card p-4">
+            <h5>Asociar repuesto a esta orden</h5>
+            <p class="small text-muted">
+              Registrar un uso descontará inmediatamente la cantidad del stock del catálogo.
+              Comprueba los datos antes de guardar; esta versión no incluye anulación del consumo.
+            </p>
+            <div v-if="orderPartSuccess" class="alert alert-success" role="status">
+              {{ orderPartSuccess }}
+            </div>
+            <div v-if="orderPartFormError" class="alert alert-danger" role="alert">
+              {{ orderPartFormError }}
+            </div>
+            <div v-if="partCatalogError" class="alert alert-warning" role="alert">
+              {{ partCatalogError }}
+            </div>
+            <div v-if="['DELIVERED', 'CLOSED'].includes(order.status)" class="alert alert-secondary">
+              No es posible registrar repuestos en una orden entregada o cerrada.
+            </div>
+            <div v-else-if="!canRegisterParts" class="alert alert-info">
+              Tu perfil puede consultar los repuestos, pero no registrar nuevos usos.
+            </div>
+            <template v-else>
+              <div v-if="!orderPartsLoading && !partCatalogError && !partCatalog.some(item => item.is_active && item.stock > 0)" class="alert alert-info small">
+                No hay repuestos activos con stock disponible. Registra o actualiza
+                el catálogo desde <router-link to="/repuestos">Repuestos</router-link>.
+              </div>
+              <form @submit.prevent="registerOrderPart">
+                <label for="order-part-select" class="form-label">Repuesto</label>
+                <select
+                  id="order-part-select"
+                  v-model.number="orderPartForm.part"
+                  class="form-select mb-3"
+                  :disabled="orderPartSaving || orderPartsLoading || !!partCatalogError"
+                  required
+                >
+                  <option value="" disabled>Seleccionar repuesto...</option>
+                  <option
+                    v-for="item in partCatalog.filter(item => item.is_active && item.stock > 0)"
+                    :key="item.id"
+                    :value="item.id"
+                  >
+                    {{ item.name }} · {{ item.supplier_name }} ({{ item.stock }} disponibles)
+                  </option>
+                </select>
+                <div v-if="selectedPart" class="alert alert-light border small">
+                  Stock disponible: <strong>{{ selectedPart.stock }}</strong> ·
+                  Costo unitario actual: <strong>{{ formatMoney(selectedPart.unit_cost) }}</strong>
+                </div>
+                <label for="order-part-quantity" class="form-label">Cantidad utilizada</label>
+                <input
+                  id="order-part-quantity"
+                  v-model.number="orderPartForm.quantity"
+                  type="number"
+                  min="1"
+                  step="1"
+                  :max="selectedPart?.stock || undefined"
+                  class="form-control mb-3"
+                  :disabled="orderPartSaving || orderPartsLoading"
+                  required
+                >
+                <label for="order-part-note" class="form-label">Observación (opcional)</label>
+                <textarea
+                  id="order-part-note"
+                  v-model="orderPartForm.note"
+                  class="form-control mb-3"
+                  rows="2"
+                  maxlength="250"
+                  :disabled="orderPartSaving || orderPartsLoading"
+                  placeholder="Ej.: Pantalla instalada durante reparación."
+                ></textarea>
+                <button
+                  type="submit"
+                  class="btn btn-primary"
+                  :disabled="orderPartSaving || orderPartsLoading || !!partCatalogError || !selectedPart || !selectedPart.is_active || selectedPart.stock < 1"
+                >
+                  <span v-if="orderPartSaving" class="spinner-border spinner-border-sm me-2"></span>
+                  {{ orderPartSaving ? 'Registrando...' : 'Registrar uso y descontar stock' }}
+                </button>
+              </form>
+            </template>
           </div>
         </div>
       </section>
