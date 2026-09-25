@@ -1,9 +1,11 @@
+
 import uuid
+from decimal import Decimal
 from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.validators import FileExtensionValidator
+from django.core.validators import FileExtensionValidator, MinValueValidator
 from django.db import models
 
 from customers.models import Client
@@ -368,3 +370,99 @@ class OrderStatusHistory(models.Model):
             f"{self.order.tracking_code}: "
             f"{self.from_status or 'INICIO'} → {self.to_status}"
         )
+
+
+# HU-14: Costos, precios y márgenes de reparación.
+class OrderFinancial(models.Model):
+    """
+    Información financiera de una orden de servicio.
+
+    El costo de repuestos se obtiene desde OrderPart (HU-13).
+    No se almacena nuevamente aquí para evitar duplicaciones.
+    """
+
+    order = models.OneToOneField(
+        ServiceOrder,
+        on_delete=models.PROTECT,
+        related_name="financial",
+    )
+
+    # Puede quedar pendiente mientras no se defina el precio.
+    price_charged = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        default=None,
+        validators=[
+            MinValueValidator(Decimal("0.00")),
+        ],
+    )
+
+    labor_cost = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        validators=[
+            MinValueValidator(Decimal("0.00")),
+        ],
+    )
+
+    other_direct_cost = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        validators=[
+            MinValueValidator(Decimal("0.00")),
+        ],
+    )
+
+    notes = models.TextField(
+        blank=True,
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_financials_created",
+    )
+
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_financials_updated",
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(price_charged__isnull=True)
+                    | models.Q(price_charged__gte=0)
+                ),
+                name="order_financial_price_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(labor_cost__gte=0),
+                name="order_financial_labor_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(other_direct_cost__gte=0),
+                name="order_financial_other_nonnegative",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Finanzas - {self.order.tracking_code}"
