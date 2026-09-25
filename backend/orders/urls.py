@@ -15,6 +15,7 @@ from .views import (
     ServiceOrderListCreateView,
 )
 from .viability_views import OrderViabilityView
+from .warranty_summary_views import OrderWarrantySummaryListView
 from .warranty_views import (
     OrderWarrantyDetailView,
     OrderWarrantyHistoryView,
@@ -39,6 +40,13 @@ urlpatterns = [
         "indicators/",
         OperationalIndicatorsView.as_view(),
         name="operational-indicators",
+    ),
+
+    # TEC-02: Listado general de garantías registradas.
+    path(
+        "warranties/",
+        OrderWarrantySummaryListView.as_view(),
+        name="order-warranty-summary-list",
     ),
 
     path(
@@ -69,7 +77,7 @@ urlpatterns = [
         name="order-financial",
     ),
 
-    # HU-15: Garantías e historial de revisiones.
+    # HU-15: Garantías e historial de revisiones por orden.
     path(
         "<int:pk>/warranties/",
         OrderWarrantyListCreateView.as_view(),
