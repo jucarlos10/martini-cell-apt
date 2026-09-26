@@ -1,4 +1,3 @@
-
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 
@@ -10,6 +9,12 @@ import { authenticatedFetch } from '../services/auth'
 const orders = ref([])
 const search = ref('')
 const selectedStatus = ref('')
+
+// Filtro por fecha de ingreso.
+const dateMode = ref('single')
+const selectedEntryDate = ref('')
+const dateFrom = ref('')
+const dateTo = ref('')
 
 const loading = ref(true)
 const error = ref('')
@@ -28,8 +33,49 @@ const statuses = [
   { value: 'REJECTED', label: 'No reparado/rechazado' },
 ]
 
-// Buscar entre las órdenes reales obtenidas desde Django.
+// Obtener la fecha local en formato YYYY-MM-DD.
+// Debe coincidir con el día mostrado en la columna Ingreso.
+function getLocalDateValue(value) {
+  if (!value) return ''
+
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) return ''
+
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+
+  return `${year}-${month}-${day}`
+}
+
+const invalidDateRange = computed(() => {
+  return Boolean(
+    dateMode.value === 'range' &&
+    dateFrom.value &&
+    dateTo.value &&
+    dateFrom.value > dateTo.value
+  )
+})
+
+const hasActiveDateFilter = computed(() => {
+  if (dateMode.value === 'single') {
+    return Boolean(selectedEntryDate.value)
+  }
+
+  return Boolean(dateFrom.value || dateTo.value)
+})
+
+function clearDateFilter() {
+  selectedEntryDate.value = ''
+  dateFrom.value = ''
+  dateTo.value = ''
+}
+
+// Combinar búsqueda, estado y fecha de ingreso.
 const filteredOrders = computed(() => {
+  if (invalidDateRange.value) return []
+
   const term = search.value.trim().toLowerCase()
 
   return orders.value.filter((order) => {
@@ -49,7 +95,22 @@ const filteredOrders = computed(() => {
     const matchesSearch =
       !term || searchableText.includes(term)
 
-    return matchesStatus && matchesSearch
+    const entryDate = getLocalDateValue(order.received_at)
+
+    let matchesEntryDate = true
+
+    if (dateMode.value === 'single') {
+      matchesEntryDate =
+        !selectedEntryDate.value ||
+        entryDate === selectedEntryDate.value
+    } else if (dateFrom.value || dateTo.value) {
+      matchesEntryDate =
+        Boolean(entryDate) &&
+        (!dateFrom.value || entryDate >= dateFrom.value) &&
+        (!dateTo.value || entryDate <= dateTo.value)
+    }
+
+    return matchesStatus && matchesSearch && matchesEntryDate
   })
 })
 
@@ -146,23 +207,37 @@ onMounted(loadOrders)
     </div>
 
     <div class="mc-card p-3">
-      <!-- Búsqueda y filtros -->
+      <!-- Búsqueda y estado -->
       <div class="row g-2 mb-3">
         <div class="col-md-8">
+          <label
+            for="order-search"
+            class="form-label small mb-1"
+          >
+            Buscar orden
+          </label>
+
           <input
+            id="order-search"
             v-model="search"
             class="form-control"
             type="search"
             placeholder="Buscar por código, cliente o equipo..."
-            aria-label="Buscar órdenes"
           >
         </div>
 
         <div class="col-md-4">
+          <label
+            for="order-status"
+            class="form-label small mb-1"
+          >
+            Estado
+          </label>
+
           <select
+            id="order-status"
             v-model="selectedStatus"
             class="form-select"
-            aria-label="Filtrar por estado"
           >
             <option
               v-for="status in statuses"
@@ -173,6 +248,100 @@ onMounted(loadOrders)
             </option>
           </select>
         </div>
+      </div>
+
+      <!-- Filtro por fecha de ingreso -->
+      <div class="row g-2 mb-3 align-items-end">
+        <div class="col-md-3">
+          <label
+            for="order-date-mode"
+            class="form-label small mb-1"
+          >
+            Filtrar por fecha de ingreso
+          </label>
+
+          <select
+            id="order-date-mode"
+            v-model="dateMode"
+            class="form-select"
+          >
+            <option value="single">Un día</option>
+            <option value="range">Rango de fechas</option>
+          </select>
+        </div>
+
+        <div
+          v-if="dateMode === 'single'"
+          class="col-md-6"
+        >
+          <label
+            for="order-entry-date"
+            class="form-label small mb-1"
+          >
+            Fecha de ingreso
+          </label>
+
+          <input
+            id="order-entry-date"
+            v-model="selectedEntryDate"
+            class="form-control"
+            type="date"
+          >
+        </div>
+
+        <template v-else>
+          <div class="col-md-3">
+            <label
+              for="order-date-from"
+              class="form-label small mb-1"
+            >
+              Desde
+            </label>
+
+            <input
+              id="order-date-from"
+              v-model="dateFrom"
+              class="form-control"
+              type="date"
+            >
+          </div>
+
+          <div class="col-md-3">
+            <label
+              for="order-date-to"
+              class="form-label small mb-1"
+            >
+              Hasta
+            </label>
+
+            <input
+              id="order-date-to"
+              v-model="dateTo"
+              class="form-control"
+              type="date"
+            >
+          </div>
+        </template>
+
+        <div class="col-md-3">
+          <button
+            type="button"
+            class="btn btn-outline-secondary w-100"
+            :disabled="!hasActiveDateFilter"
+            @click="clearDateFilter"
+          >
+            <i class="bi bi-x-circle me-1"></i>
+            Limpiar fechas
+          </button>
+        </div>
+      </div>
+
+      <div
+        v-if="invalidDateRange"
+        class="alert alert-warning"
+        role="alert"
+      >
+        La fecha «Hasta» no puede ser anterior a la fecha «Desde».
       </div>
 
       <!-- Tabla -->
@@ -204,9 +373,7 @@ onMounted(loadOrders)
               </td>
             </tr>
 
-            <tr
-              v-else-if="filteredOrders.length === 0"
-            >
+            <tr v-else-if="filteredOrders.length === 0">
               <td
                 colspan="7"
                 class="empty-state text-center"
@@ -214,7 +381,9 @@ onMounted(loadOrders)
                 {{
                   error
                     ? 'No se pudieron cargar las órdenes.'
-                    : 'No hay órdenes para los filtros seleccionados.'
+                    : invalidDateRange
+                      ? 'Corrige el rango de fechas seleccionado.'
+                      : 'No hay órdenes para los filtros seleccionados.'
                 }}
               </td>
             </tr>
@@ -223,7 +392,6 @@ onMounted(loadOrders)
               v-for="order in loading ? [] : filteredOrders"
               :key="order.id"
             >
-              <!-- Enlace al detalle real de la orden -->
               <td>
                 <router-link
                   :to="`/ordenes/${order.id}`"
