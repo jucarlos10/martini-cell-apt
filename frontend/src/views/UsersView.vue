@@ -1,6 +1,5 @@
-
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import AdminLayout from '../layouts/AdminLayout.vue'
@@ -18,14 +17,34 @@ const users = ref([])
 const loading = ref(true)
 const saving = ref(false)
 const updatingId = ref(null)
+const actionType = ref('')
 
 const showForm = ref(false)
 const editingId = ref(null)
+const showArchived = ref(false)
 
 const error = ref('')
 const formError = ref('')
 const actionError = ref('')
 const success = ref('')
+
+const busy = computed(
+  () => saving.value || updatingId.value !== null
+)
+
+const currentUsers = computed(() =>
+  users.value.filter((user) => !user.is_archived)
+)
+
+const archivedUsers = computed(() =>
+  users.value.filter((user) => user.is_archived)
+)
+
+const visibleUsers = computed(() =>
+  showArchived.value
+    ? archivedUsers.value
+    : currentUsers.value
+)
 
 const emptyForm = () => ({
   username: '',
@@ -38,6 +57,38 @@ const emptyForm = () => ({
 })
 
 const form = ref(emptyForm())
+
+function isOwnAccount(user) {
+  return String(user.id) === String(getCurrentUser()?.id)
+}
+
+function getFullName(user) {
+  return (
+    [user.first_name, user.last_name]
+      .filter(Boolean)
+      .join(' ') || 'Sin nombre registrado'
+  )
+}
+
+function formatApiErrors(data) {
+  if (typeof data?.detail === 'string') {
+    return data.detail
+  }
+
+  if (!data || typeof data !== 'object') {
+    return 'No fue posible completar la operación.'
+  }
+
+  return Object.entries(data)
+    .map(([field, messages]) => {
+      const text = Array.isArray(messages)
+        ? messages.join(' ')
+        : String(messages)
+
+      return `${field}: ${text}`
+    })
+    .join(' ')
+}
 
 async function loadUsers() {
   loading.value = true
@@ -61,23 +112,31 @@ async function loadUsers() {
     users.value = Array.isArray(data)
       ? data
       : data.results || []
-
   } catch (err) {
     users.value = []
     error.value = err.message || 'Error al cargar los usuarios.'
-
   } finally {
     loading.value = false
   }
 }
 
-function getFullName(user) {
-  return [user.first_name, user.last_name]
-    .filter(Boolean)
-    .join(' ') || 'Sin nombre registrado'
+function switchView(archived) {
+  if (busy.value) return
+
+  showArchived.value = archived
+
+  showForm.value = false
+  editingId.value = null
+  form.value = emptyForm()
+
+  formError.value = ''
+  actionError.value = ''
+  success.value = ''
 }
 
 function openForm() {
+  if (busy.value || showArchived.value) return
+
   editingId.value = null
   form.value = emptyForm()
 
@@ -89,7 +148,7 @@ function openForm() {
 }
 
 function editUser(user) {
-  if (saving.value || updatingId.value !== null) return
+  if (busy.value || user.is_archived) return
 
   editingId.value = user.id
 
@@ -120,28 +179,8 @@ function cancelForm() {
   form.value = emptyForm()
 }
 
-function formatApiErrors(data) {
-  if (typeof data?.detail === 'string') {
-    return data.detail
-  }
-
-  if (!data || typeof data !== 'object') {
-    return 'No fue posible completar la operación.'
-  }
-
-  return Object.entries(data)
-    .map(([field, messages]) => {
-      const text = Array.isArray(messages)
-        ? messages.join(' ')
-        : String(messages)
-
-      return `${field}: ${text}`
-    })
-    .join(' ')
-}
-
 async function saveUser() {
-  if (saving.value || updatingId.value !== null) return
+  if (busy.value) return
 
   formError.value = ''
   actionError.value = ''
@@ -171,7 +210,7 @@ async function saveUser() {
     }
 
     // Al crear, la contraseña es obligatoria.
-    // Al editar, solo la enviamos si se ingresó una nueva.
+    // Al editar, solo se envía si se ingresó una nueva.
     if (form.value.password) {
       payload.password = form.value.password
     }
@@ -213,7 +252,7 @@ async function saveUser() {
       : 'Usuario creado correctamente.'
 
     // Si el administrador editó su propia cuenta,
-    // actualizamos también su perfil almacenado en sesión.
+    // actualizar también el usuario guardado en sesión.
     if (
       isEditing &&
       editedUserId === getCurrentUser()?.id
@@ -226,33 +265,32 @@ async function saveUser() {
       }
     }
 
-    // Volvemos a obtener los datos reales desde PostgreSQL.
     await loadUsers()
-
   } catch (err) {
     formError.value =
       err.message || 'No fue posible guardar el usuario.'
-
   } finally {
     saving.value = false
   }
 }
 
 async function toggleUser(user) {
-  if (updatingId.value !== null || saving.value) return
+  if (busy.value || user.is_archived) return
 
   const nextActive = !user.is_active
 
   if (
     !nextActive &&
     !window.confirm(
-      `¿Estás seguro de que deseas desactivar al usuario ${user.username}?`
+      `¿Estás seguro de que deseas desactivar al usuario "${user.username}"?`
     )
   ) {
     return
   }
 
   updatingId.value = user.id
+  actionType.value = 'toggle'
+
   actionError.value = ''
   success.value = ''
 
@@ -284,12 +322,13 @@ async function toggleUser(user) {
 
     const updatedUser = await response.json()
 
-    // Solo cambiamos la tabla cuando Django confirma.
+    // Actualizar la tabla únicamente cuando Django confirme.
     users.value = users.value.map((item) =>
       item.id === user.id
         ? {
             ...item,
             is_active: updatedUser.is_active,
+            is_archived: updatedUser.is_archived,
           }
         : item
     )
@@ -297,13 +336,157 @@ async function toggleUser(user) {
     success.value = updatedUser.is_active
       ? 'Usuario activado correctamente.'
       : 'Usuario desactivado correctamente.'
-
   } catch (err) {
     actionError.value =
       err.message || 'No fue posible cambiar el estado del usuario.'
-
   } finally {
     updatingId.value = null
+    actionType.value = ''
+  }
+}
+
+async function changeArchiveStatus(user, archive) {
+  if (busy.value) return
+
+  if (archive && isOwnAccount(user)) {
+    actionError.value = 'No puedes archivar tu propia cuenta.'
+    return
+  }
+
+  if (
+    archive &&
+    !window.confirm(
+      `¿Archivar al usuario "${user.username}"?\n\n` +
+      'Su cuenta será desactivada y dejará de aparecer en ' +
+      'el listado principal. Sus registros históricos se conservarán.'
+    )
+  ) {
+    return
+  }
+
+  updatingId.value = user.id
+  actionType.value = archive ? 'archive' : 'restore'
+
+  actionError.value = ''
+  success.value = ''
+
+  try {
+    const response = await authenticatedFetch(
+      `/api/users/${user.id}/`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          is_archived: archive,
+        }),
+      }
+    )
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null)
+
+      if (response.status === 403) {
+        throw new Error(
+          'No tienes permisos para gestionar el archivo de usuarios.'
+        )
+      }
+
+      throw new Error(formatApiErrors(data))
+    }
+
+    const updatedUser = await response.json()
+
+    users.value = users.value.map((item) =>
+      item.id === user.id
+        ? {
+            ...item,
+            is_archived: updatedUser.is_archived,
+            is_active: updatedUser.is_active,
+          }
+        : item
+    )
+
+    success.value = archive
+      ? `Usuario "${user.username}" archivado correctamente.`
+      : (
+          `Usuario "${user.username}" restaurado correctamente. ` +
+          'Permanece inactivo hasta que un administrador lo active.'
+        )
+  } catch (err) {
+    actionError.value =
+      err.message ||
+      'No fue posible actualizar el archivo de usuarios.'
+  } finally {
+    updatingId.value = null
+    actionType.value = ''
+  }
+}
+
+async function deleteUser(user) {
+  if (busy.value) return
+
+  if (isOwnAccount(user)) {
+    actionError.value = 'No puedes eliminar tu propia cuenta.'
+    return
+  }
+
+  const confirmed = window.confirm(
+    `¿Eliminar definitivamente al usuario "${user.username}"?\n\n` +
+    'Esta acción no se puede deshacer.\n\n' +
+    'Si tiene registros históricos vinculados, el sistema ' +
+    'impedirá eliminarlo y podrás archivarlo.'
+  )
+
+  if (!confirmed) return
+
+  updatingId.value = user.id
+  actionType.value = 'delete'
+
+  actionError.value = ''
+  success.value = ''
+
+  try {
+    const response = await authenticatedFetch(
+      `/api/users/${user.id}/`,
+      {
+        method: 'DELETE',
+      }
+    )
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null)
+
+      if (response.status === 403) {
+        throw new Error(
+          'No tienes permisos para eliminar usuarios.'
+        )
+      }
+
+      if (response.status === 404) {
+        throw new Error(
+          'Este usuario ya no existe. Actualiza el listado.'
+        )
+      }
+
+      throw new Error(formatApiErrors(data))
+    }
+
+    // DELETE devuelve 204: no se intenta leer un cuerpo JSON.
+    // La cuenta se retira de la tabla solo después de la confirmación.
+    users.value = users.value.filter(
+      (item) => item.id !== user.id
+    )
+
+    success.value =
+      `Usuario "${user.username}" eliminado definitivamente.`
+  } catch (err) {
+    actionError.value =
+      err.message || 'No fue posible eliminar el usuario.'
+  } finally {
+    updatingId.value = null
+    actionType.value = ''
   }
 }
 
@@ -316,13 +499,14 @@ onMounted(loadUsers)
       Usuarios y roles
 
       <template #subtitle>
-        Usuarios registrados en Martini Cell.
+        Administración de cuentas, permisos y archivo de usuarios.
       </template>
 
       <template #actions>
         <button
+          v-if="!showArchived"
           class="btn btn-primary"
-          :disabled="saving || updatingId !== null"
+          :disabled="busy"
           @click="openForm"
         >
           <i class="bi bi-plus-lg me-1"></i>
@@ -357,14 +541,60 @@ onMounted(loadUsers)
 
       <button
         class="btn btn-sm btn-outline-danger ms-3"
+        :disabled="busy"
         @click="loadUsers"
       >
         Reintentar
       </button>
     </div>
 
+    <!-- Vistas de usuarios actuales y archivados -->
+    <div class="d-flex flex-wrap gap-2 mb-3">
+      <button
+        type="button"
+        class="btn"
+        :class="
+          !showArchived
+            ? 'btn-primary'
+            : 'btn-outline-primary'
+        "
+        :disabled="busy"
+        @click="switchView(false)"
+      >
+        <i class="bi bi-people me-1"></i>
+        Usuarios actuales ({{ currentUsers.length }})
+      </button>
+
+      <button
+        type="button"
+        class="btn"
+        :class="
+          showArchived
+            ? 'btn-primary'
+            : 'btn-outline-primary'
+        "
+        :disabled="busy"
+        @click="switchView(true)"
+      >
+        <i class="bi bi-archive me-1"></i>
+        Archivados ({{ archivedUsers.length }})
+      </button>
+    </div>
+
+    <div
+      v-if="showArchived"
+      class="alert alert-info"
+    >
+      Las cuentas archivadas permanecen en la base de datos para
+      conservar su historial. Al restaurarlas, quedan inactivas
+      hasta que un administrador las active nuevamente.
+    </div>
+
     <!-- Formulario para crear o editar usuarios -->
-    <div v-if="showForm" class="mc-card p-4 mb-4">
+    <div
+      v-if="showForm && !showArchived"
+      class="mc-card p-4 mb-4"
+    >
       <h5 class="mb-3">
         {{
           editingId !== null
@@ -383,9 +613,11 @@ onMounted(loadUsers)
 
       <form @submit.prevent="saveUser">
         <div class="row g-3">
-
           <div class="col-md-6">
-            <label for="username" class="form-label">
+            <label
+              for="username"
+              class="form-label"
+            >
               Usuario
             </label>
 
@@ -400,7 +632,10 @@ onMounted(loadUsers)
           </div>
 
           <div class="col-md-6">
-            <label for="email" class="form-label">
+            <label
+              for="email"
+              class="form-label"
+            >
               Correo electrónico
             </label>
 
@@ -415,7 +650,10 @@ onMounted(loadUsers)
           </div>
 
           <div class="col-md-6">
-            <label for="first_name" class="form-label">
+            <label
+              for="first_name"
+              class="form-label"
+            >
               Nombre
             </label>
 
@@ -429,7 +667,10 @@ onMounted(loadUsers)
           </div>
 
           <div class="col-md-6">
-            <label for="last_name" class="form-label">
+            <label
+              for="last_name"
+              class="form-label"
+            >
               Apellido
             </label>
 
@@ -443,7 +684,10 @@ onMounted(loadUsers)
           </div>
 
           <div class="col-md-6">
-            <label for="role" class="form-label">
+            <label
+              for="role"
+              class="form-label"
+            >
               Rol
             </label>
 
@@ -453,14 +697,23 @@ onMounted(loadUsers)
               class="form-select"
               :disabled="saving"
             >
-              <option value="ADMIN">Administrador</option>
-              <option value="TECH">Técnico</option>
-              <option value="HELPER">Ayudante</option>
+              <option value="ADMIN">
+                Administrador
+              </option>
+              <option value="TECH">
+                Técnico
+              </option>
+              <option value="HELPER">
+                Ayudante
+              </option>
             </select>
           </div>
 
           <div class="col-md-6">
-            <label for="password" class="form-label">
+            <label
+              for="password"
+              class="form-label"
+            >
               {{
                 editingId !== null
                   ? 'Nueva contraseña (opcional)'
@@ -487,7 +740,10 @@ onMounted(loadUsers)
           </div>
 
           <div class="col-md-6">
-            <label for="confirmPassword" class="form-label">
+            <label
+              for="confirmPassword"
+              class="form-label"
+            >
               Confirmar contraseña
             </label>
 
@@ -497,18 +753,19 @@ onMounted(loadUsers)
               type="password"
               class="form-control"
               autocomplete="new-password"
-              :required="editingId === null || !!form.password"
+              :required="
+                editingId === null || !!form.password
+              "
               :disabled="saving"
             >
           </div>
-
         </div>
 
         <div class="d-flex flex-wrap gap-2 mt-4">
           <button
             type="submit"
             class="btn btn-primary"
-            :disabled="saving || updatingId !== null"
+            :disabled="busy"
           >
             {{
               saving
@@ -531,8 +788,11 @@ onMounted(loadUsers)
       </form>
     </div>
 
-    <!-- Listado de usuarios reales -->
-    <div v-if="loading" class="mc-card p-4 text-center">
+    <!-- Carga -->
+    <div
+      v-if="loading"
+      class="mc-card p-4 text-center"
+    >
       <div
         class="spinner-border text-primary mb-2"
         role="status"
@@ -543,8 +803,12 @@ onMounted(loadUsers)
       </div>
     </div>
 
-    <div v-else-if="!error" class="mc-card p-3 table-responsive">
-      <table class="table mb-0">
+    <!-- Listado obtenido desde Django -->
+    <div
+      v-else-if="!error"
+      class="mc-card p-3 table-responsive"
+    >
+      <table class="table mb-0 align-middle">
         <thead>
           <tr>
             <th>Usuario</th>
@@ -556,15 +820,37 @@ onMounted(loadUsers)
         </thead>
 
         <tbody>
-          <tr v-for="u in users" :key="u.id">
-            <td>{{ u.username }}</td>
+          <tr
+            v-for="u in visibleUsers"
+            :key="u.id"
+          >
+            <td>
+              {{ u.username }}
+
+              <span
+                v-if="isOwnAccount(u)"
+                class="badge text-bg-light border ms-1"
+              >
+                Tu cuenta
+              </span>
+            </td>
 
             <td>{{ getFullName(u) }}</td>
 
-            <td>{{ u.role_display || u.role }}</td>
+            <td>
+              {{ u.role_display || u.role }}
+            </td>
 
             <td>
               <span
+                v-if="u.is_archived"
+                class="badge text-bg-secondary"
+              >
+                Archivado
+              </span>
+
+              <span
+                v-else
                 class="badge"
                 :class="
                   u.is_active
@@ -577,11 +863,15 @@ onMounted(loadUsers)
             </td>
 
             <td>
-              <div class="d-flex flex-wrap gap-2">
-
+              <!-- Acciones de usuarios actuales -->
+              <div
+                v-if="!u.is_archived"
+                class="d-flex flex-wrap gap-2"
+              >
                 <button
+                  type="button"
                   class="btn btn-sm btn-outline-primary"
-                  :disabled="saving || updatingId !== null"
+                  :disabled="busy"
                   @click="editUser(u)"
                 >
                   <i class="bi bi-pencil me-1"></i>
@@ -589,12 +879,16 @@ onMounted(loadUsers)
                 </button>
 
                 <button
+                  type="button"
                   class="btn btn-sm btn-outline-secondary"
-                  :disabled="saving || updatingId !== null"
+                  :disabled="
+                    busy || isOwnAccount(u)
+                  "
                   @click="toggleUser(u)"
                 >
                   {{
-                    updatingId === u.id
+                    updatingId === u.id &&
+                    actionType === 'toggle'
                       ? 'Guardando...'
                       : u.is_active
                         ? 'Desactivar'
@@ -602,13 +896,91 @@ onMounted(loadUsers)
                   }}
                 </button>
 
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-warning"
+                  :disabled="
+                    busy || isOwnAccount(u)
+                  "
+                  @click="changeArchiveStatus(u, true)"
+                >
+                  <i class="bi bi-archive me-1"></i>
+                  {{
+                    updatingId === u.id &&
+                    actionType === 'archive'
+                      ? 'Archivando...'
+                      : 'Archivar'
+                  }}
+                </button>
+
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-danger"
+                  :disabled="
+                    busy || isOwnAccount(u)
+                  "
+                  @click="deleteUser(u)"
+                >
+                  <i class="bi bi-trash me-1"></i>
+                  {{
+                    updatingId === u.id &&
+                    actionType === 'delete'
+                      ? 'Eliminando...'
+                      : 'Eliminar'
+                  }}
+                </button>
+              </div>
+
+              <!-- Acciones de usuarios archivados -->
+              <div
+                v-else
+                class="d-flex flex-wrap gap-2"
+              >
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-primary"
+                  :disabled="busy"
+                  @click="changeArchiveStatus(u, false)"
+                >
+                  <i class="bi bi-arrow-counterclockwise me-1"></i>
+                  {{
+                    updatingId === u.id &&
+                    actionType === 'restore'
+                      ? 'Restaurando...'
+                      : 'Restaurar'
+                  }}
+                </button>
+
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-danger"
+                  :disabled="
+                    busy || isOwnAccount(u)
+                  "
+                  @click="deleteUser(u)"
+                >
+                  <i class="bi bi-trash me-1"></i>
+                  {{
+                    updatingId === u.id &&
+                    actionType === 'delete'
+                      ? 'Eliminando...'
+                      : 'Eliminar'
+                  }}
+                </button>
               </div>
             </td>
           </tr>
 
-          <tr v-if="users.length === 0">
-            <td colspan="5" class="text-center text-muted py-4">
-              No hay usuarios registrados.
+          <tr v-if="visibleUsers.length === 0">
+            <td
+              colspan="5"
+              class="text-center text-muted py-4"
+            >
+              {{
+                showArchived
+                  ? 'No hay usuarios archivados.'
+                  : 'No hay usuarios registrados en este listado.'
+              }}
             </td>
           </tr>
         </tbody>
