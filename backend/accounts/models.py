@@ -14,5 +14,10 @@ class User(AbstractUser):
         default=Role.HELPER,
     )
 
+    # Una cuenta archivada se conserva en PostgreSQL para mantener
+    # sus relaciones históricas, pero no aparecerá en el listado
+    # principal de usuarios.
+    is_archived = models.BooleanField(default=False)
+
     def __str__(self):
         return f"{self.username} - {self.get_role_display()}"
