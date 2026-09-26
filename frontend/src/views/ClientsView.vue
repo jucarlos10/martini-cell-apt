@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 
 import AdminLayout from '../layouts/AdminLayout.vue'
 import PageHeader from '../components/PageHeader.vue'
-import { authenticatedFetch } from '../services/auth'
+import { authenticatedFetch, getCurrentUser } from '../services/auth'
 
 const clients = ref([])
 const selectedId = ref(null)
@@ -30,6 +30,19 @@ const equipmentError = ref('')
 const showEquipmentForm = ref(false)
 const savingEquipment = ref(false)
 const equipmentFormError = ref('')
+
+// Las acciones destructivas solo se muestran a ADMIN.
+// El backend también comprueba los permisos en cada solicitud.
+const isAdmin = computed(() => getCurrentUser()?.role === 'ADMIN')
+const deletingClientId = ref(null)
+const deletingEquipmentId = ref(null)
+const actionError = ref('')
+const isBusy = computed(() =>
+  saving.value ||
+  savingEquipment.value ||
+  deletingClientId.value !== null ||
+  deletingEquipmentId.value !== null
+)
 
 const equipmentTypes = [
   { value: 'CELULAR', label: 'Celular' },
@@ -387,7 +400,7 @@ async function loadEquipment() {
 
 function openEquipmentForm() {
   if (!selectedClient.value || !selectedClient.value.is_active) return
-  if (saving.value || savingEquipment.value) return
+  if (isBusy.value) return
 
   equipmentForm.value = emptyEquipmentForm()
   equipmentFormError.value = ''
@@ -404,7 +417,7 @@ function cancelEquipmentForm() {
 }
 
 async function createEquipment() {
-  if (savingEquipment.value || saving.value) return
+  if (isBusy.value) return
 
   const client = selectedClient.value
   equipmentFormError.value = ''
@@ -474,6 +487,8 @@ watch(selectedId, () => {
 
 // Abrir formulario para crear.
 function openForm() {
+  if (isBusy.value) return
+
   editingId.value = null
   form.value = emptyForm()
 
@@ -485,7 +500,7 @@ function openForm() {
 
 // Abrir formulario para editar.
 function editClient(client) {
-  if (!client || saving.value) return
+  if (!client || isBusy.value) return
 
   editingId.value = client.id
 
@@ -514,7 +529,7 @@ function cancelForm() {
 
 // Crear o actualizar un cliente en Django.
 async function saveClient() {
-  if (saving.value) return
+  if (isBusy.value) return
 
   const isEditing = editingId.value !== null
   const clientId = editingId.value
@@ -577,6 +592,106 @@ async function saveClient() {
   }
 }
 
+// Eliminar un cliente solo tras la confirmación y el HTTP 204 de Django.
+async function deleteClient(client) {
+  if (!isAdmin.value || isBusy.value || !client) return
+
+  const confirmed = window.confirm(
+    `¿Eliminar definitivamente al cliente "${client.name}"?\n\n` +
+    'Solo se permite si no tiene equipos, órdenes ni historial de modificaciones. ' +
+    'Esta acción no se puede deshacer.'
+  )
+  if (!confirmed) return
+
+  deletingClientId.value = client.id
+  actionError.value = ''
+  success.value = ''
+
+  try {
+    const response = await authenticatedFetch(`/api/clients/${client.id}/`, {
+      method: 'DELETE',
+    })
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null)
+      throw new Error(
+        response.status === 403
+          ? 'Solo el administrador puede eliminar clientes.'
+          : formatApiErrors(data)
+      )
+    }
+
+    if (response.status !== 204) {
+      throw new Error('La API no confirmó la eliminación del cliente.')
+    }
+
+    if (editingId.value === client.id) {
+      showForm.value = false
+      editingId.value = null
+      form.value = emptyForm()
+      formError.value = ''
+    }
+
+    clients.value = clients.value.filter((item) => item.id !== client.id)
+
+    if (selectedId.value === client.id) {
+      selectedId.value = clients.value[0]?.id ?? null
+    }
+
+    success.value = `Cliente "${client.name}" eliminado correctamente.`
+  } catch (err) {
+    actionError.value = err.message || 'No fue posible eliminar el cliente.'
+  } finally {
+    deletingClientId.value = null
+  }
+}
+
+// Eliminar un equipo sin tocar al cliente ni sus órdenes históricas.
+async function deleteEquipment(item) {
+  if (!isAdmin.value || isBusy.value || !item) return
+
+  const confirmed = window.confirm(
+    `¿Eliminar definitivamente el equipo #${item.id} (${item.brand} ${item.model})?\n\n` +
+    'Solo se permite si no tiene órdenes de servicio asociadas. ' +
+    'Esta acción no se puede deshacer.'
+  )
+  if (!confirmed) return
+
+  deletingEquipmentId.value = item.id
+  actionError.value = ''
+  success.value = ''
+
+  try {
+    const response = await authenticatedFetch(`/api/devices/${item.id}/`, {
+      method: 'DELETE',
+    })
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null)
+      throw new Error(
+        response.status === 403
+          ? 'Solo el administrador puede eliminar equipos.'
+          : formatApiErrors(data)
+      )
+    }
+
+    if (response.status !== 204) {
+      throw new Error('La API no confirmó la eliminación del equipo.')
+    }
+
+    if (expandedEquipmentId.value === item.id) {
+      clearEquipmentHistory()
+    }
+
+    equipment.value = equipment.value.filter((entry) => entry.id !== item.id)
+    success.value = `Equipo #${item.id} eliminado correctamente.`
+  } catch (err) {
+    actionError.value = err.message || 'No fue posible eliminar el equipo.'
+  } finally {
+    deletingEquipmentId.value = null
+  }
+}
+
 onMounted(() => {
   loadClients()
   loadEquipment()
@@ -595,7 +710,7 @@ onMounted(() => {
       <template #actions>
         <button
           class="btn btn-primary"
-          :disabled="saving || savingEquipment"
+          :disabled="isBusy"
           @click="openForm"
         >
           <i class="bi bi-plus-lg me-1"></i>
@@ -611,6 +726,14 @@ onMounted(() => {
       role="status"
     >
       {{ success }}
+    </div>
+
+    <div
+      v-if="actionError"
+      class="alert alert-danger"
+      role="alert"
+    >
+      {{ actionError }}
     </div>
 
     <div
@@ -784,7 +907,7 @@ onMounted(() => {
               :key="client.id"
               type="button"
               class="list-group-item list-group-item-action"
-              :disabled="saving || savingEquipment"
+              :disabled="isBusy"
               :class="{
                 active: selectedId === client.id
               }"
@@ -828,14 +951,29 @@ onMounted(() => {
               </div>
             </div>
 
-            <div>
+            <div class="d-flex flex-wrap gap-2">
               <button
+                type="button"
                 class="btn btn-outline-primary btn-sm"
-                :disabled="saving || savingEquipment"
+                :disabled="isBusy"
                 @click="editClient(selectedClient)"
               >
                 <i class="bi bi-pencil me-1"></i>
                 Editar cliente
+              </button>
+              <button
+                v-if="isAdmin"
+                type="button"
+                class="btn btn-outline-danger btn-sm"
+                :disabled="isBusy"
+                @click="deleteClient(selectedClient)"
+              >
+                <i class="bi bi-trash me-1"></i>
+                {{
+                  deletingClientId === selectedClient.id
+                    ? 'Eliminando...'
+                    : 'Eliminar cliente'
+                }}
               </button>
             </div>
           </div>
@@ -1058,15 +1196,32 @@ onMounted(() => {
               </div>
 
               <!-- HU-06: historial de atenciones del equipo. -->
-              <button
-                type="button"
-                class="btn btn-sm btn-outline-primary mt-3"
-                :aria-expanded="expandedEquipmentId === item.id"
-                @click="toggleEquipmentHistory(item)"
-              >
-                <i class="bi bi-clock-history me-1"></i>
-                {{ expandedEquipmentId === item.id ? 'Ocultar hoja de vida' : 'Ver hoja de vida' }}
-              </button>
+              <div class="d-flex flex-wrap gap-2 mt-3">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-primary"
+                  :disabled="isBusy"
+                  :aria-expanded="expandedEquipmentId === item.id"
+                  @click="toggleEquipmentHistory(item)"
+                >
+                  <i class="bi bi-clock-history me-1"></i>
+                  {{ expandedEquipmentId === item.id ? 'Ocultar hoja de vida' : 'Ver hoja de vida' }}
+                </button>
+                <button
+                  v-if="isAdmin"
+                  type="button"
+                  class="btn btn-sm btn-outline-danger"
+                  :disabled="isBusy"
+                  @click="deleteEquipment(item)"
+                >
+                  <i class="bi bi-trash me-1"></i>
+                  {{
+                    deletingEquipmentId === item.id
+                      ? 'Eliminando...'
+                      : 'Eliminar equipo'
+                  }}
+                </button>
+              </div>
 
               <div
                 v-if="expandedEquipmentId === item.id"
