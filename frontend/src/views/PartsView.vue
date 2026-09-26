@@ -8,6 +8,7 @@ import { authenticatedFetch, getCurrentUser } from '../services/auth'
 
 const currentUser = getCurrentUser()
 const canManage = ['ADMIN', 'TECH'].includes(currentUser?.role)
+const canDelete = currentUser?.role === 'ADMIN'
 
 const tab = ref('parts')
 
@@ -36,8 +37,10 @@ const filteredSuppliers = computed(() => {
 
 const loading = ref(true)
 const saving = ref(false)
+const deleting = ref(false)
 
 const error = ref('')
+const actionError = ref('')
 const formError = ref('')
 const success = ref('')
 
@@ -145,8 +148,11 @@ async function loadInventory() {
 }
 
 function changeTab(nextTab) {
+  if (deleting.value) return
+
   tab.value = nextTab
   formError.value = ''
+  actionError.value = ''
   success.value = ''
 }
 
@@ -157,7 +163,10 @@ function resetSupplierForm() {
 }
 
 function editSupplier(supplier) {
+  if (saving.value || deleting.value) return
+
   editingSupplierId.value = supplier.id
+  actionError.value = ''
 
   supplierForm.value = {
     name: supplier.name || '',
@@ -172,8 +181,9 @@ function editSupplier(supplier) {
 }
 
 async function saveSupplier() {
-  if (!canManage || saving.value) return
+  if (!canManage || saving.value || deleting.value) return
 
+  actionError.value = ''
   formError.value = ''
   success.value = ''
 
@@ -240,7 +250,10 @@ function resetPartForm() {
 }
 
 function editPart(part) {
+  if (saving.value || deleting.value) return
+
   editingPartId.value = part.id
+  actionError.value = ''
 
   partForm.value = {
     name: part.name || '',
@@ -256,8 +269,9 @@ function editPart(part) {
 }
 
 async function savePart() {
-  if (!canManage || saving.value) return
+  if (!canManage || saving.value || deleting.value) return
 
+  actionError.value = ''
   formError.value = ''
   success.value = ''
 
@@ -339,6 +353,81 @@ async function savePart() {
   }
 }
 
+// La API también exige el rol ADMIN; ocultar el botón no sustituye ese permiso.
+async function deletePart(part) {
+  if (!canDelete || saving.value || deleting.value) return
+
+  const confirmed = window.confirm(
+    `¿Eliminar definitivamente el repuesto "${part.name}"?\n\n` +
+    'Esta acción no se puede deshacer. Si fue utilizado en una orden, no podrá eliminarse.'
+  )
+  if (!confirmed) return
+
+  deleting.value = true
+  actionError.value = ''
+  success.value = ''
+
+  try {
+    const response = await authenticatedFetch(
+      `/api/inventory/parts/${part.id}/`,
+      { method: 'DELETE' }
+    )
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null)
+      throw new Error(formatApiError(data, 'No fue posible eliminar el repuesto.'))
+    }
+
+    if (editingPartId.value === part.id) resetPartForm()
+    await loadInventory()
+
+    if (!error.value) {
+      success.value = `Repuesto "${part.name}" eliminado correctamente.`
+    }
+  } catch (err) {
+    actionError.value = err?.message || 'Error al eliminar el repuesto.'
+  } finally {
+    deleting.value = false
+  }
+}
+
+async function deleteSupplier(supplier) {
+  if (!canDelete || saving.value || deleting.value) return
+
+  const confirmed = window.confirm(
+    `¿Eliminar definitivamente al proveedor "${supplier.name}"?\n\n` +
+    'Esta acción no se puede deshacer. Si tiene repuestos o historial de órdenes, no podrá eliminarse.'
+  )
+  if (!confirmed) return
+
+  deleting.value = true
+  actionError.value = ''
+  success.value = ''
+
+  try {
+    const response = await authenticatedFetch(
+      `/api/inventory/suppliers/${supplier.id}/`,
+      { method: 'DELETE' }
+    )
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null)
+      throw new Error(formatApiError(data, 'No fue posible eliminar el proveedor.'))
+    }
+
+    if (editingSupplierId.value === supplier.id) resetSupplierForm()
+    await loadInventory()
+
+    if (!error.value) {
+      success.value = `Proveedor "${supplier.name}" eliminado correctamente.`
+    }
+  } catch (err) {
+    actionError.value = err?.message || 'Error al eliminar el proveedor.'
+  } finally {
+    deleting.value = false
+  }
+}
+
 onMounted(loadInventory)
 </script>
 
@@ -355,7 +444,7 @@ onMounted(loadInventory)
         <button
           type="button"
           class="btn btn-outline-secondary"
-          :disabled="loading || saving"
+          :disabled="loading || saving || deleting"
           @click="loadInventory"
         >
           <i class="bi bi-arrow-clockwise me-1"></i>
@@ -370,11 +459,15 @@ onMounted(loadInventory)
       <button
         type="button"
         class="btn btn-sm btn-outline-danger ms-2"
-        :disabled="loading"
+        :disabled="loading || deleting"
         @click="loadInventory"
       >
         Reintentar
       </button>
+    </div>
+
+    <div v-if="actionError" class="alert alert-danger" role="alert">
+      {{ actionError }}
     </div>
 
     <div v-if="success" class="alert alert-success" role="status">
@@ -457,14 +550,27 @@ onMounted(loadInventory)
                   </td>
 
                   <td v-if="canManage">
-                    <button
-                      type="button"
-                      class="btn btn-sm btn-outline-primary"
-                      :disabled="saving"
-                      @click="editPart(item)"
-                    >
-                      Editar
-                    </button>
+                    <div class="d-flex flex-nowrap align-items-center gap-1">
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-outline-primary"
+                        :disabled="saving || deleting"
+                        @click="editPart(item)"
+                      >
+                        Editar
+                      </button>
+                      <button
+                        v-if="canDelete"
+                        type="button"
+                        class="btn btn-sm btn-outline-danger px-2"
+                        :disabled="saving || deleting"
+                        :aria-label="`Eliminar repuesto ${item.name}`"
+                        :title="`Eliminar repuesto ${item.name}`"
+                        @click="deletePart(item)"
+                      >
+                        <i class="bi bi-trash3" aria-hidden="true"></i>
+                      </button>
+                    </div>
                   </td>
                 </tr>
               </tbody>
@@ -499,7 +605,7 @@ onMounted(loadInventory)
               class="form-control mb-3"
               maxlength="150"
               required
-              :disabled="saving"
+              :disabled="saving || deleting"
             >
 
             <label for="part-description" class="form-label">
@@ -510,7 +616,7 @@ onMounted(loadInventory)
               v-model="partForm.description"
               class="form-control mb-3"
               rows="2"
-              :disabled="saving"
+              :disabled="saving || deleting"
             ></textarea>
 
             <label for="part-supplier" class="form-label">
@@ -521,7 +627,7 @@ onMounted(loadInventory)
               v-model.number="partForm.supplier"
               class="form-select mb-3"
               required
-              :disabled="saving"
+              :disabled="saving || deleting"
             >
               <option value="">Seleccionar proveedor...</option>
 
@@ -546,7 +652,7 @@ onMounted(loadInventory)
               step="0.01"
               class="form-control mb-3"
               required
-              :disabled="saving"
+              :disabled="saving || deleting"
             >
 
             <label for="part-stock" class="form-label">
@@ -560,7 +666,7 @@ onMounted(loadInventory)
               step="1"
               class="form-control mb-3"
               required
-              :disabled="saving"
+              :disabled="saving || deleting"
             >
 
             <div class="form-check mb-3">
@@ -569,7 +675,7 @@ onMounted(loadInventory)
                 v-model="partForm.is_active"
                 type="checkbox"
                 class="form-check-input"
-                :disabled="saving"
+                :disabled="saving || deleting"
               >
               <label for="part-active" class="form-check-label">
                 Repuesto activo
@@ -580,7 +686,7 @@ onMounted(loadInventory)
               <button
                 type="submit"
                 class="btn btn-primary"
-                :disabled="saving || !hasActiveSuppliers"
+                :disabled="saving || deleting || !hasActiveSuppliers"
               >
                 {{ saving ? 'Guardando...' : (editingPartId !== null ? 'Guardar cambios' : 'Registrar repuesto') }}
               </button>
@@ -589,7 +695,7 @@ onMounted(loadInventory)
                 v-if="editingPartId !== null"
                 type="button"
                 class="btn btn-outline-secondary"
-                :disabled="saving"
+                :disabled="saving || deleting"
                 @click="resetPartForm"
               >
                 Cancelar
@@ -668,14 +774,27 @@ onMounted(loadInventory)
                   </td>
 
                   <td v-if="canManage">
-                    <button
-                      type="button"
-                      class="btn btn-sm btn-outline-primary"
-                      :disabled="saving"
-                      @click="editSupplier(item)"
-                    >
-                      Editar
-                    </button>
+                    <div class="d-flex flex-nowrap align-items-center gap-1">
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-outline-primary"
+                        :disabled="saving || deleting"
+                        @click="editSupplier(item)"
+                      >
+                        Editar
+                      </button>
+                      <button
+                        v-if="canDelete"
+                        type="button"
+                        class="btn btn-sm btn-outline-danger px-2"
+                        :disabled="saving || deleting"
+                        :aria-label="`Eliminar proveedor ${item.name}`"
+                        :title="`Eliminar proveedor ${item.name}`"
+                        @click="deleteSupplier(item)"
+                      >
+                        <i class="bi bi-trash3" aria-hidden="true"></i>
+                      </button>
+                    </div>
                   </td>
                 </tr>
               </tbody>
@@ -704,7 +823,7 @@ onMounted(loadInventory)
               class="form-control mb-3"
               maxlength="150"
               required
-              :disabled="saving"
+              :disabled="saving || deleting"
             >
 
             <label for="supplier-contact" class="form-label">
@@ -715,7 +834,7 @@ onMounted(loadInventory)
               v-model.trim="supplierForm.contact_name"
               class="form-control mb-3"
               maxlength="150"
-              :disabled="saving"
+              :disabled="saving || deleting"
             >
 
             <label for="supplier-phone" class="form-label">
@@ -727,7 +846,7 @@ onMounted(loadInventory)
               type="tel"
               class="form-control mb-3"
               maxlength="30"
-              :disabled="saving"
+              :disabled="saving || deleting"
             >
 
             <label for="supplier-email" class="form-label">
@@ -738,7 +857,7 @@ onMounted(loadInventory)
               v-model.trim="supplierForm.email"
               type="email"
               class="form-control mb-3"
-              :disabled="saving"
+              :disabled="saving || deleting"
             >
 
             <div class="form-check mb-3">
@@ -747,7 +866,7 @@ onMounted(loadInventory)
                 v-model="supplierForm.is_active"
                 type="checkbox"
                 class="form-check-input"
-                :disabled="saving"
+                :disabled="saving || deleting"
               >
               <label for="supplier-active" class="form-check-label">
                 Proveedor activo
@@ -758,7 +877,7 @@ onMounted(loadInventory)
               <button
                 type="submit"
                 class="btn btn-primary"
-                :disabled="saving"
+                :disabled="saving || deleting"
               >
                 {{ saving ? 'Guardando...' : (editingSupplierId !== null ? 'Guardar cambios' : 'Registrar proveedor') }}
               </button>
@@ -767,7 +886,7 @@ onMounted(loadInventory)
                 v-if="editingSupplierId !== null"
                 type="button"
                 class="btn btn-outline-secondary"
-                :disabled="saving"
+                :disabled="saving || deleting"
                 @click="resetSupplierForm"
               >
                 Cancelar
