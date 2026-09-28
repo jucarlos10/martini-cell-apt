@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import AdminLayout from '../layouts/AdminLayout.vue'
 import PageHeader from '../components/PageHeader.vue'
@@ -9,12 +9,37 @@ const warranties = ref([])
 const loading = ref(true)
 const error = ref('')
 
+const search = ref('')
+const statusFilter = ref('')
+const typeFilter = ref('')
+
 const statusLabels = {
   ACTIVE: 'Vigente',
   EXPIRED: 'Vencida',
   NOT_STARTED: 'Aún no inicia',
   NOT_APPLICABLE: 'No aplica',
 }
+
+const statusOptions = [
+  { value: '', label: 'Todos los estados' },
+  { value: 'ACTIVE', label: 'Vigente' },
+  { value: 'EXPIRED', label: 'Vencida' },
+  { value: 'NOT_STARTED', label: 'Aún no inicia' },
+  { value: 'NOT_APPLICABLE', label: 'No aplica' },
+]
+
+const typeOptions = [
+  { value: '', label: 'Todos los tipos' },
+  { value: 'SERVICE', label: 'Garantía del servicio' },
+  { value: 'PART', label: 'Garantía de repuesto' },
+]
+
+const hasActiveFilters = computed(
+  () =>
+    search.value.trim() !== '' ||
+    statusFilter.value !== '' ||
+    typeFilter.value !== ''
+)
 
 function statusBadgeClass(value) {
   return {
@@ -48,14 +73,40 @@ function formatValidity(warranty) {
   )
 }
 
+function buildWarrantyUrl() {
+  const params = new URLSearchParams()
+
+  const searchValue = search.value.trim()
+
+  if (searchValue) {
+    params.set('q', searchValue)
+  }
+
+  if (statusFilter.value) {
+    params.set('status', statusFilter.value)
+  }
+
+  if (typeFilter.value) {
+    params.set('type', typeFilter.value)
+  }
+
+  const query = params.toString()
+
+  return query
+    ? `/api/orders/warranties/?${query}`
+    : '/api/orders/warranties/'
+}
+
 async function loadWarranties() {
   loading.value = true
   error.value = ''
 
   try {
     const response = await authenticatedFetch(
-      '/api/orders/warranties/'
+      buildWarrantyUrl()
     )
+
+    const data = await response.json().catch(() => null)
 
     if (!response.ok) {
       if (response.status === 403) {
@@ -65,11 +116,10 @@ async function loadWarranties() {
       }
 
       throw new Error(
+        data?.detail ||
         'No fue posible cargar las garantías. Inténtalo nuevamente.'
       )
     }
-
-    const data = await response.json()
 
     warranties.value = Array.isArray(data)
       ? data
@@ -79,11 +129,20 @@ async function loadWarranties() {
     warranties.value = []
 
     error.value =
-      err?.message || 'Ocurrió un error al consultar las garantías.'
+      err?.message ||
+      'Ocurrió un error al consultar las garantías.'
 
   } finally {
     loading.value = false
   }
+}
+
+async function clearFilters() {
+  search.value = ''
+  statusFilter.value = ''
+  typeFilter.value = ''
+
+  await loadWarranties()
 }
 
 onMounted(loadWarranties)
@@ -95,7 +154,7 @@ onMounted(loadWarranties)
       Garantías
 
       <template #subtitle>
-        Seguimiento de las garantías registradas en Martini Cell.
+        Seguimiento y búsqueda de las garantías registradas en Martini Cell.
       </template>
 
       <template #actions>
@@ -125,6 +184,108 @@ onMounted(loadWarranties)
       >
         Reintentar
       </button>
+    </div>
+
+    <!-- HU-33: búsqueda y filtros de garantías -->
+    <div class="mc-card p-3 mb-3">
+      <form
+        class="row g-3 align-items-end"
+        @submit.prevent="loadWarranties"
+      >
+        <div class="col-lg-6">
+          <label
+            for="warranty-search"
+            class="form-label"
+          >
+            Buscar garantía
+          </label>
+
+          <input
+            id="warranty-search"
+            v-model="search"
+            type="search"
+            class="form-control"
+            placeholder="Código de orden, RUT o nombre del cliente..."
+            :disabled="loading"
+          >
+
+          <div class="form-text">
+            Puedes buscar por código de seguimiento, RUT o nombre del cliente.
+          </div>
+        </div>
+
+        <div class="col-md-6 col-lg-2">
+          <label
+            for="warranty-status"
+            class="form-label"
+          >
+            Estado
+          </label>
+
+          <select
+            id="warranty-status"
+            v-model="statusFilter"
+            class="form-select"
+            :disabled="loading"
+            @change="loadWarranties"
+          >
+            <option
+              v-for="option in statusOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
+
+        <div class="col-md-6 col-lg-2">
+          <label
+            for="warranty-type"
+            class="form-label"
+          >
+            Tipo
+          </label>
+
+          <select
+            id="warranty-type"
+            v-model="typeFilter"
+            class="form-select"
+            :disabled="loading"
+            @change="loadWarranties"
+          >
+            <option
+              v-for="option in typeOptions"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
+
+        <div class="col-lg-2">
+          <div class="d-grid gap-2">
+            <button
+              type="submit"
+              class="btn btn-primary"
+              :disabled="loading"
+            >
+              <i class="bi bi-search me-1"></i>
+              Buscar
+            </button>
+
+            <button
+              type="button"
+              class="btn btn-outline-secondary"
+              :disabled="loading || !hasActiveFilters"
+              @click="clearFilters"
+            >
+              Limpiar
+            </button>
+          </div>
+        </div>
+      </form>
     </div>
 
     <div class="mc-card p-3">
@@ -172,7 +333,14 @@ onMounted(loadWarranties)
                 colspan="6"
                 class="text-center py-4 text-muted"
               >
-                No hay garantías registradas.
+                <template v-if="hasActiveFilters">
+                  No se encontraron garantías que coincidan con la búsqueda
+                  o los filtros seleccionados.
+                </template>
+
+                <template v-else>
+                  No hay garantías registradas.
+                </template>
               </td>
             </tr>
 
@@ -223,7 +391,10 @@ onMounted(loadWarranties)
               </td>
 
               <td>
-                {{ warranty.conditions || 'Sin condiciones registradas' }}
+                {{
+                  warranty.conditions ||
+                  'Sin condiciones registradas'
+                }}
               </td>
             </tr>
           </tbody>
