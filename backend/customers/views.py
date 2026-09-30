@@ -62,8 +62,15 @@ class ClientDetailView(RetrieveUpdateDestroyAPIView):
 
         return super().get_permissions()
 
+    @transaction.atomic
     def perform_update(self, serializer):
-        client = self.get_object()
+        # Bloquear la fila y usar su estado actual para que el cambio
+        # y el historial se confirmen juntos, incluso ante ediciones
+        # simultáneas del mismo cliente.
+        client = Client.objects.select_for_update().get(
+            pk=serializer.instance.pk,
+        )
+        serializer.instance = client
 
         fields_to_track = (
             "rut",
