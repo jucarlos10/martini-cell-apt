@@ -393,6 +393,20 @@ class OrderPartCorrectionTests(APITestCase):
             self.admin.role,
         )
 
+        OrderPartCorrectionHistory.objects.filter(
+            pk=entry["id"],
+        ).update(changed_by=None)
+        history_without_user = self.client.get(self.history_url)
+        self.assertEqual(history_without_user.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            history_without_user.data[0]["changed_by_username"],
+            self.admin.username,
+        )
+        self.assertEqual(
+            history_without_user.data[0]["changed_by_role"],
+            self.admin.role,
+        )
+
     def test_same_value_is_rejected_without_history(self):
         response = self.correct(
             "QUANTITY",

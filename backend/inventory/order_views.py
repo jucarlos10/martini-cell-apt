@@ -317,6 +317,8 @@ class OrderPartCorrectionView(APIView):
             new_value=str(new_quantity),
             reason=reason,
             changed_by=request.user,
+            changed_by_username=request.user.get_username(),
+            changed_by_role=request.user.role,
         )
 
         return Response(
@@ -357,6 +359,8 @@ class OrderPartCorrectionView(APIView):
             new_value=new_note,
             reason=reason,
             changed_by=request.user,
+            changed_by_username=request.user.get_username(),
+            changed_by_role=request.user.role,
         )
 
         return Response(

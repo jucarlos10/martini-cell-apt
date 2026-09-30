@@ -211,16 +211,6 @@ class OrderPartCorrectionHistorySerializer(
         read_only=True,
     )
 
-    changed_by_username = serializers.CharField(
-        source="changed_by.username",
-        read_only=True,
-    )
-
-    changed_by_role = serializers.CharField(
-        source="changed_by.role",
-        read_only=True,
-    )
-
     class Meta:
         model = OrderPartCorrectionHistory
         fields = (

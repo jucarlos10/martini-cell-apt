@@ -181,6 +181,18 @@ class OrderPartCorrectionHistory(models.Model):
         related_name="order_part_corrections",
     )
 
+    changed_by_username = models.CharField(
+        max_length=150,
+        blank=True,
+        editable=False,
+    )
+
+    changed_by_role = models.CharField(
+        max_length=20,
+        blank=True,
+        editable=False,
+    )
+
     changed_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
