@@ -16,9 +16,13 @@ from .views import (
 )
 from .viability_views import OrderViabilityView
 from .warranty_request_views import (
+    WarrantyRequestAdminNoteView,
     WarrantyRequestDetailView,
     WarrantyRequestHistoryView,
     WarrantyRequestListCreateView,
+    WarrantyRequestProposalView,
+    WarrantyRequestResolveView,
+    WarrantyRequestReturnView,
     WarrantyRequestsByWarrantyView,
 )
 from .warranty_summary_views import OrderWarrantySummaryListView
@@ -120,6 +124,28 @@ urlpatterns = [
         "<int:pk>/warranties/<int:warranty_id>/requests/",
         WarrantyRequestsByWarrantyView.as_view(),
         name="warranty-requests-by-warranty",
+    ),
+
+    # HU-23: Flujo de resolución de solicitudes de garantía.
+    path(
+        "<int:pk>/warranty-requests/<int:request_id>/proposal/",
+        WarrantyRequestProposalView.as_view(),
+        name="warranty-request-proposal",
+    ),
+    path(
+        "<int:pk>/warranty-requests/<int:request_id>/return/",
+        WarrantyRequestReturnView.as_view(),
+        name="warranty-request-return",
+    ),
+    path(
+        "<int:pk>/warranty-requests/<int:request_id>/resolve/",
+        WarrantyRequestResolveView.as_view(),
+        name="warranty-request-resolve",
+    ),
+    path(
+        "<int:pk>/warranty-requests/<int:request_id>/admin-note/",
+        WarrantyRequestAdminNoteView.as_view(),
+        name="warranty-request-admin-note",
     ),
 
     # HU-16: Evaluación e índice de viabilidad.
