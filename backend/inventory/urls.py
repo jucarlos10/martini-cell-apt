@@ -1,7 +1,10 @@
-
 from django.urls import path
 
-from .order_views import OrderPartsView
+from .order_views import (
+    OrderPartCorrectionHistoryView,
+    OrderPartCorrectionView,
+    OrderPartsView,
+)
 from .views import (
     PartDetailView,
     PartListCreateView,
@@ -37,5 +40,23 @@ urlpatterns = [
         "orders/<int:order_id>/parts/",
         OrderPartsView.as_view(),
         name="order-parts",
+    ),
+
+    # HU-24: Corrección de un repuesto registrado.
+    path(
+        (
+            "orders/<int:order_id>/parts/"
+            "<int:order_part_id>/correction/"
+        ),
+        OrderPartCorrectionView.as_view(),
+        name="order-part-correction",
+    ),
+    path(
+        (
+            "orders/<int:order_id>/parts/"
+            "<int:order_part_id>/correction-history/"
+        ),
+        OrderPartCorrectionHistoryView.as_view(),
+        name="order-part-correction-history",
     ),
 ]
