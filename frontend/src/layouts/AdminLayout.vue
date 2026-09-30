@@ -60,7 +60,7 @@ function logout() {
           <i class="bi bi-people" aria-hidden="true"></i>
           <span>Clientes y equipos</span>
         </router-link>
-        <router-link v-if="user.role !== 'HELPER'" to="/repuestos" @click="closeMenu">
+        <router-link to="/repuestos" @click="closeMenu">
           <i class="bi bi-box-seam" aria-hidden="true"></i>
           <span>Repuestos</span>
         </router-link>
