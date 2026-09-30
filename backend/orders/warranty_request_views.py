@@ -1,6 +1,9 @@
+import mimetypes
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Max
+from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404
 
 from rest_framework import status
@@ -206,6 +209,14 @@ class WarrantyRequestListCreateView(APIView):
 
         validated_data = dict(serializer.validated_data)
 
+        # Serializa nuevas solicitudes sobre la misma garantía para que
+        # la regla del motivo concurrente se compruebe con datos actuales.
+        validated_data["warranty"] = get_object_or_404(
+            OrderWarranty.objects.select_for_update(),
+            pk=validated_data["warranty"].pk,
+            order=order,
+        )
+
         try:
             warranty_request = WarrantyRequest(
                 order=order,
@@ -268,6 +279,44 @@ class WarrantyRequestDetailView(APIView):
                 warranty_request,
             ).data
         )
+
+
+class WarrantyRequestEvidenceView(APIView):
+    """Entrega la fotografía privada solo a perfiles internos autorizados."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk, request_id):
+        denied = require_warranty_permission(request.user)
+        if denied:
+            return denied
+
+        warranty_request = get_object_or_404(
+            WarrantyRequest,
+            pk=request_id,
+            order_id=pk,
+        )
+        if not warranty_request.evidence:
+            raise Http404
+
+        content_type, _ = mimetypes.guess_type(warranty_request.evidence.name)
+        if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+            raise Http404
+
+        try:
+            warranty_request.evidence.open("rb")
+        except (FileNotFoundError, OSError):
+            raise Http404
+
+        response = FileResponse(
+            warranty_request.evidence,
+            content_type=content_type,
+        )
+        response["Content-Disposition"] = (
+            f'inline; filename="warranty-request-evidence-{request_id}"'
+        )
+        response["Cache-Control"] = "private, no-store"
+        return response
 
 
 class WarrantyRequestHistoryView(APIView):

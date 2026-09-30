@@ -1,5 +1,10 @@
+import base64
+import tempfile
 from datetime import timedelta
 
+from django.core.files.base import ContentFile
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -149,6 +154,15 @@ class WarrantyRequestTests(APITestCase):
             "warranty-request-history",
             kwargs={
                 "pk": self.order.pk,
+                "request_id": request_id,
+            },
+        )
+
+    def evidence_url(self, request_id, order=None):
+        return reverse(
+            "warranty-request-evidence",
+            kwargs={
+                "pk": (order or self.order).pk,
                 "request_id": request_id,
             },
         )
@@ -458,6 +472,72 @@ class WarrantyRequestTests(APITestCase):
             history.data[0]["action"],
             WarrantyRequestHistory.Action.CREATED,
         )
+
+    def test_private_evidence_is_available_only_to_authorized_order_users(self):
+        created = self.create_request()
+        request_id = created.data["id"]
+        warranty_request = WarrantyRequest.objects.get(pk=request_id)
+        url = self.evidence_url(request_id)
+
+        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            warranty_request.evidence.save(
+                "prueba.jpg", ContentFile(b"private-photo-bytes"), save=True,
+            )
+
+            detail = self.client.get(self.detail_url(request_id))
+            listing = self.client.get(self.list_url)
+            self.assertTrue(detail.data["evidence"])
+            self.assertEqual(detail.data["evidence_download_url"], url)
+            self.assertEqual(listing.data[0]["evidence_download_url"], url)
+            self.assertNotIn("warranty_requests/", str(detail.data))
+
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(response["Content-Type"], "image/jpeg")
+            self.assertEqual(response["Cache-Control"], "private, no-store")
+            self.assertEqual(b"".join(response.streaming_content), b"private-photo-bytes")
+            response.close()
+
+            self.client.force_authenticate(user=self.technician)
+            self.assertEqual(self.client.get(url).status_code, 200)
+            self.assertEqual(
+                self.client.get(self.evidence_url(request_id, self.other_order)).status_code,
+                status.HTTP_404_NOT_FOUND,
+            )
+
+            self.client.force_authenticate(user=self.helper)
+            self.assertEqual(self.client.get(url).status_code, status.HTTP_403_FORBIDDEN)
+
+            self.client.force_authenticate(user=None)
+            self.assertEqual(self.client.get(url).status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_missing_evidence_returns_404_without_exposing_storage_path(self):
+        created = self.create_request()
+        self.assertFalse(created.data["evidence"])
+        self.assertIsNone(created.data["evidence_download_url"])
+        self.assertEqual(
+            self.client.get(self.evidence_url(created.data["id"])).status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+    @override_settings(EVIDENCE_MAX_UPLOAD_SIZE=1)
+    def test_oversized_evidence_is_rejected_before_saving_request(self):
+        image = SimpleUploadedFile(
+            "foto.png",
+            base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4"
+                "/5+hHgAHggJ/PYFv9QAAAABJRU5ErkJggg=="
+            ),
+            content_type="image/png",
+        )
+        response = self.client.post(
+            self.list_url,
+            self.request_payload(evidence=image),
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("evidence", response.data)
+        self.assertFalse(WarrantyRequest.objects.exists())
 
     def test_requests_can_be_listed_by_warranty(self):
         first = self.create_request()

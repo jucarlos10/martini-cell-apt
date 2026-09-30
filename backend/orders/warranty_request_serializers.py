@@ -1,3 +1,5 @@
+from django.conf import settings
+from django.urls import reverse
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -40,6 +42,13 @@ class WarrantyRequestWriteSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+
+    def validate_evidence(self, value):
+        if value and value.size > settings.EVIDENCE_MAX_UPLOAD_SIZE:
+            raise serializers.ValidationError(
+                "La fotografía supera el máximo permitido de 20 MB."
+            )
+        return value
 
     class Meta:
         model = WarrantyRequest
@@ -334,6 +343,9 @@ class WarrantyRequestReadSerializer(serializers.ModelSerializer):
 
     coverage_warning = serializers.SerializerMethodField()
 
+    evidence = serializers.SerializerMethodField()
+    evidence_download_url = serializers.SerializerMethodField()
+
     client_name = serializers.CharField(
         source="client_name_snapshot",
         read_only=True,
@@ -378,6 +390,7 @@ class WarrantyRequestReadSerializer(serializers.ModelSerializer):
             "client_name",
             "client_rut",
             "evidence",
+            "evidence_download_url",
             "created_by",
             "created_by_username",
             "created_at",
@@ -396,6 +409,17 @@ class WarrantyRequestReadSerializer(serializers.ModelSerializer):
             )
 
         return None
+
+    def get_evidence(self, obj):
+        return bool(obj.evidence)
+
+    def get_evidence_download_url(self, obj):
+        if not obj.evidence:
+            return None
+        return reverse(
+            "warranty-request-evidence",
+            kwargs={"pk": obj.order_id, "request_id": obj.pk},
+        )
 
     def get_has_other_open_request(self, obj):
         return (
