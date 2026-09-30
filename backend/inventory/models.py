@@ -1,4 +1,3 @@
-
 from decimal import Decimal
 
 from django.conf import settings
@@ -142,4 +141,53 @@ class OrderPart(models.Model):
         return (
             f"Orden {self.order_id} - "
             f"{self.part.name} x {self.quantity}"
+        )
+
+
+class OrderPartCorrectionHistory(models.Model):
+    """
+    Auditoría de correcciones realizadas a un uso de repuesto.
+
+    HU-24 permite corregir directamente solo cantidad y nota.
+    Repuesto, proveedor y costo unitario conservan su valor
+    histórico y deben tratarse mediante anulación y nuevo uso.
+    """
+
+    class Field(models.TextChoices):
+        QUANTITY = "QUANTITY", "Cantidad"
+        NOTE = "NOTE", "Nota"
+
+    order_part = models.ForeignKey(
+        OrderPart,
+        on_delete=models.PROTECT,
+        related_name="correction_history",
+    )
+
+    field_name = models.CharField(
+        max_length=20,
+        choices=Field.choices,
+    )
+
+    old_value = models.TextField()
+
+    new_value = models.TextField()
+
+    reason = models.TextField()
+
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="order_part_corrections",
+    )
+
+    changed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["changed_at", "id"]
+
+    def __str__(self):
+        return (
+            f"Corrección uso {self.order_part_id} - "
+            f"{self.get_field_name_display()}"
         )

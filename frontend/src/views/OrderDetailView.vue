@@ -12,6 +12,7 @@ const currentUser = getCurrentUser()
 const canEditReport = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canChangeStatus = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canRegisterParts = ['ADMIN', 'TECH'].includes(currentUser?.role)
+const canCorrectParts = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canViewFinancial = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canEditFinancial = currentUser?.role === 'ADMIN'
 const canViewWarranties = ['ADMIN', 'TECH'].includes(currentUser?.role)
@@ -118,6 +119,51 @@ const usedPartsTotal = computed(() =>
   usedParts.value.reduce((total, item) => total + Number(item.subtotal || 0), 0)
 )
 let orderPartsRequestId = 0
+
+// HU-24: corrección trazable de cantidad/nota en usos de repuesto.
+const orderPartCorrectionOpenId = ref(null)
+const orderPartCorrectionForms = ref({})
+const orderPartCorrectionSavingId = ref(null)
+const orderPartCorrectionErrors = ref({})
+const orderPartCorrectionSuccess = ref({})
+const orderPartCorrectionHistoryById = ref({})
+const orderPartCorrectionHistoryLoading = ref({})
+const orderPartCorrectionHistoryErrors = ref({})
+const expandedOrderPartCorrectionHistoryId = ref(null)
+let orderPartCorrectionHistoryRequestId = 0
+let orderPartCorrectionHistoryLatestById = {}
+
+function emptyOrderPartCorrectionForm(item = null) {
+  return {
+    field_name: 'QUANTITY',
+    quantity: item?.quantity ?? 1,
+    note: item?.note ?? '',
+    reason: '',
+  }
+}
+
+function setOrderPartCorrectionError(orderPartId, message) {
+  orderPartCorrectionErrors.value = {
+    ...orderPartCorrectionErrors.value,
+    [orderPartId]: message,
+  }
+}
+
+function setOrderPartCorrectionSuccess(orderPartId, message) {
+  orderPartCorrectionSuccess.value = {
+    ...orderPartCorrectionSuccess.value,
+    [orderPartId]: message,
+  }
+}
+
+function clearOrderPartCorrectionMessages(orderPartId) {
+  setOrderPartCorrectionError(orderPartId, '')
+  setOrderPartCorrectionSuccess(orderPartId, '')
+}
+
+function isOrderPartCorrectionSaving(orderPartId) {
+  return Number(orderPartCorrectionSavingId.value) === Number(orderPartId)
+}
 
 // HU-14: resumen calculado en Django y datos financieros editables por ADMIN.
 const financial = ref(null)
@@ -1865,6 +1911,8 @@ function formatMoney(value) {
 
 function resetOrderParts() {
   ++orderPartsRequestId
+  ++orderPartCorrectionHistoryRequestId
+  orderPartCorrectionHistoryLatestById = {}
   usedParts.value = []
   partCatalog.value = []
   orderPartsLoading.value = false
@@ -1874,6 +1922,15 @@ function resetOrderParts() {
   orderPartFormError.value = ''
   orderPartSuccess.value = ''
   orderPartForm.value = emptyOrderPartForm()
+  orderPartCorrectionOpenId.value = null
+  orderPartCorrectionForms.value = {}
+  orderPartCorrectionSavingId.value = null
+  orderPartCorrectionErrors.value = {}
+  orderPartCorrectionSuccess.value = {}
+  orderPartCorrectionHistoryById.value = {}
+  orderPartCorrectionHistoryLoading.value = {}
+  orderPartCorrectionHistoryErrors.value = {}
+  expandedOrderPartCorrectionHistoryId.value = null
 }
 
 async function loadOrderParts() {
@@ -1976,6 +2033,225 @@ async function registerOrderPart() {
   } finally {
     if (sequence === loadSequence) orderPartSaving.value = false
   }
+}
+
+
+function toggleOrderPartCorrection(item) {
+  if (!canCorrectParts) return
+
+  if (Number(orderPartCorrectionOpenId.value) === Number(item.id)) {
+    orderPartCorrectionOpenId.value = null
+    return
+  }
+
+  orderPartCorrectionForms.value = {
+    ...orderPartCorrectionForms.value,
+    [item.id]: emptyOrderPartCorrectionForm(item),
+  }
+  clearOrderPartCorrectionMessages(item.id)
+  orderPartCorrectionOpenId.value = item.id
+}
+
+async function submitOrderPartCorrection(item) {
+  if (
+    !order.value
+    || !canCorrectParts
+    || isOrderPartCorrectionSaving(item.id)
+  ) return
+
+  clearOrderPartCorrectionMessages(item.id)
+
+  if (['DELIVERED', 'CLOSED'].includes(order.value.status)) {
+    setOrderPartCorrectionError(
+      item.id,
+      'No se pueden corregir repuestos de una orden entregada o cerrada.'
+    )
+    return
+  }
+
+  const form = orderPartCorrectionForms.value[item.id]
+  if (!form) return
+
+  const reason = String(form.reason ?? '').trim()
+  if (!reason) {
+    setOrderPartCorrectionError(item.id, 'Debes indicar el motivo de la corrección.')
+    return
+  }
+
+  let newValue = ''
+
+  if (form.field_name === 'QUANTITY') {
+    const quantity = Number(form.quantity)
+
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      setOrderPartCorrectionError(
+        item.id,
+        'La nueva cantidad debe ser un número entero igual o mayor que uno.'
+      )
+      return
+    }
+
+    if (quantity === Number(item.quantity)) {
+      setOrderPartCorrectionError(
+        item.id,
+        'La nueva cantidad debe ser distinta de la cantidad actual.'
+      )
+      return
+    }
+
+    newValue = String(quantity)
+  } else if (form.field_name === 'NOTE') {
+    const note = String(form.note ?? '')
+
+    if (note.length > 250) {
+      setOrderPartCorrectionError(item.id, 'La nota no puede superar los 250 caracteres.')
+      return
+    }
+
+    if (note === String(item.note ?? '')) {
+      setOrderPartCorrectionError(
+        item.id,
+        'La nueva nota debe ser distinta de la nota actual.'
+      )
+      return
+    }
+
+    newValue = note
+  } else {
+    setOrderPartCorrectionError(item.id, 'Selecciona un dato válido para corregir.')
+    return
+  }
+
+  const sequence = loadSequence
+  const orderId = order.value.id
+  orderPartCorrectionSavingId.value = item.id
+
+  try {
+    const response = await authenticatedFetch(
+      `/api/inventory/orders/${orderId}/parts/${item.id}/correction/`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          field_name: form.field_name,
+          new_value: newValue,
+          reason,
+        }),
+      }
+    )
+    const data = await response.json().catch(() => null)
+
+    if (sequence !== loadSequence) return
+
+    if (!response.ok) {
+      throw new Error(
+        evidenceApiError(data, 'No fue posible corregir el repuesto registrado.')
+      )
+    }
+
+    const updatedUsage = data?.used_part
+    if (updatedUsage) {
+      usedParts.value = usedParts.value.map((usage) =>
+        Number(usage.id) === Number(updatedUsage.id) ? updatedUsage : usage
+      )
+      orderPartCorrectionForms.value = {
+        ...orderPartCorrectionForms.value,
+        [item.id]: emptyOrderPartCorrectionForm(updatedUsage),
+      }
+    }
+
+    setOrderPartCorrectionSuccess(
+      item.id,
+      'Corrección guardada. El cambio quedó registrado en el historial.'
+    )
+
+    await loadOrderParts()
+    if (sequence === loadSequence && canViewFinancial) {
+      await loadFinancial()
+    }
+    if (sequence === loadSequence) {
+      await loadOrderPartCorrectionHistory(item.id)
+    }
+  } catch (err) {
+    if (sequence === loadSequence) {
+      setOrderPartCorrectionError(
+        item.id,
+        err?.message || 'Error al corregir el repuesto registrado.'
+      )
+    }
+  } finally {
+    if (sequence === loadSequence) {
+      orderPartCorrectionSavingId.value = null
+    }
+  }
+}
+
+async function loadOrderPartCorrectionHistory(orderPartId) {
+  if (!order.value || !canCorrectParts) return
+
+  const orderId = order.value.id
+  const sequence = loadSequence
+  const requestId = ++orderPartCorrectionHistoryRequestId
+  orderPartCorrectionHistoryLatestById[orderPartId] = requestId
+
+  const isCurrent = () =>
+    sequence === loadSequence
+    && orderPartCorrectionHistoryLatestById[orderPartId] === requestId
+
+  orderPartCorrectionHistoryLoading.value = {
+    ...orderPartCorrectionHistoryLoading.value,
+    [orderPartId]: true,
+  }
+  orderPartCorrectionHistoryErrors.value = {
+    ...orderPartCorrectionHistoryErrors.value,
+    [orderPartId]: '',
+  }
+
+  try {
+    const response = await getResponse(
+      `/api/inventory/orders/${orderId}/parts/${orderPartId}/correction-history/`
+    )
+
+    if (!isCurrent()) return
+
+    if (!response.ok) {
+      throw new Error(
+        evidenceApiError(response.data, 'No fue posible cargar el historial de correcciones.')
+      )
+    }
+
+    const data = response.data
+    orderPartCorrectionHistoryById.value = {
+      ...orderPartCorrectionHistoryById.value,
+      [orderPartId]: Array.isArray(data) ? data : (data?.results || []),
+    }
+  } catch (err) {
+    if (isCurrent()) {
+      orderPartCorrectionHistoryErrors.value = {
+        ...orderPartCorrectionHistoryErrors.value,
+        [orderPartId]: err?.message || 'Error al consultar el historial de correcciones.',
+      }
+    }
+  } finally {
+    if (isCurrent()) {
+      orderPartCorrectionHistoryLoading.value = {
+        ...orderPartCorrectionHistoryLoading.value,
+        [orderPartId]: false,
+      }
+    }
+  }
+}
+
+async function toggleOrderPartCorrectionHistory(item) {
+  if (!canCorrectParts) return
+
+  if (Number(expandedOrderPartCorrectionHistoryId.value) === Number(item.id)) {
+    expandedOrderPartCorrectionHistoryId.value = null
+    return
+  }
+
+  expandedOrderPartCorrectionHistoryId.value = item.id
+  await loadOrderPartCorrectionHistory(item.id)
 }
 
 
@@ -3183,26 +3459,249 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                     <th class="text-end">Cantidad</th>
                     <th class="text-end">Costo unitario</th>
                     <th class="text-end">Subtotal</th>
+                    <th v-if="canCorrectParts" class="text-end">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="item in usedParts" :key="item.id">
-                    <td>
-                      <strong>{{ item.part_name }}</strong>
-                      <div class="small text-muted">{{ item.supplier_name }}</div>
-                      <div class="small text-muted">
-                        {{ formatDate(item.created_at) }} · {{ item.created_by_username || 'Usuario no disponible' }}
-                      </div>
-                      <div v-if="item.note" class="small mt-1">{{ item.note }}</div>
-                    </td>
-                    <td class="text-end">{{ item.quantity }}</td>
-                    <td class="text-end">{{ formatMoney(item.unit_cost) }}</td>
-                    <td class="text-end">{{ formatMoney(item.subtotal) }}</td>
-                  </tr>
+                  <template v-for="item in usedParts" :key="item.id">
+                    <tr>
+                      <td>
+                        <strong>{{ item.part_name }}</strong>
+                        <div class="small text-muted">{{ item.supplier_name }}</div>
+                        <div class="small text-muted">
+                          {{ formatDate(item.created_at) }} · {{ item.created_by_username || 'Usuario no disponible' }}
+                        </div>
+                        <div v-if="item.note" class="small mt-1">{{ item.note }}</div>
+                      </td>
+                      <td class="text-end">{{ item.quantity }}</td>
+                      <td class="text-end">{{ formatMoney(item.unit_cost) }}</td>
+                      <td class="text-end">{{ formatMoney(item.subtotal) }}</td>
+                      <td v-if="canCorrectParts" class="text-end text-nowrap">
+                        <button
+                          type="button"
+                          class="btn btn-sm btn-outline-primary me-1"
+                          :disabled="['DELIVERED', 'CLOSED'].includes(order.status) || isOrderPartCorrectionSaving(item.id)"
+                          @click="toggleOrderPartCorrection(item)"
+                        >
+                          {{ Number(orderPartCorrectionOpenId) === Number(item.id) ? 'Cerrar' : 'Corregir' }}
+                        </button>
+                        <button
+                          type="button"
+                          class="btn btn-sm btn-outline-secondary"
+                          :disabled="orderPartCorrectionHistoryLoading[item.id]"
+                          @click="toggleOrderPartCorrectionHistory(item)"
+                        >
+                          {{
+                            Number(expandedOrderPartCorrectionHistoryId) === Number(item.id)
+                              ? 'Ocultar historial'
+                              : 'Historial'
+                          }}
+                        </button>
+                      </td>
+                    </tr>
+
+                    <tr v-if="canCorrectParts && Number(orderPartCorrectionOpenId) === Number(item.id)">
+                      <td colspan="5" class="bg-light">
+                        <div class="p-2">
+                          <h6 class="mb-2">Corregir uso de repuesto #{{ item.id }}</h6>
+                          <p class="small text-muted mb-3">
+                            HU-24 permite corregir cantidad o nota. Repuesto, proveedor y costo unitario
+                            conservan su valor histórico. Si existe una garantía asociada, la cantidad no
+                            puede modificarse.
+                          </p>
+
+                          <div
+                            v-if="orderPartCorrectionSuccess[item.id]"
+                            class="alert alert-success py-2"
+                            role="status"
+                          >
+                            {{ orderPartCorrectionSuccess[item.id] }}
+                          </div>
+                          <div
+                            v-if="orderPartCorrectionErrors[item.id]"
+                            class="alert alert-danger py-2"
+                            role="alert"
+                          >
+                            {{ orderPartCorrectionErrors[item.id] }}
+                          </div>
+
+                          <form
+                            v-if="orderPartCorrectionForms[item.id]"
+                            @submit.prevent="submitOrderPartCorrection(item)"
+                          >
+                            <div class="row g-3">
+                              <div class="col-md-3">
+                                <label :for="`correction-field-${item.id}`" class="form-label">
+                                  Dato a corregir
+                                </label>
+                                <select
+                                  :id="`correction-field-${item.id}`"
+                                  v-model="orderPartCorrectionForms[item.id].field_name"
+                                  class="form-select"
+                                  :disabled="isOrderPartCorrectionSaving(item.id)"
+                                >
+                                  <option value="QUANTITY">Cantidad</option>
+                                  <option value="NOTE">Nota</option>
+                                </select>
+                              </div>
+
+                              <div
+                                v-if="orderPartCorrectionForms[item.id].field_name === 'QUANTITY'"
+                                class="col-md-3"
+                              >
+                                <label :for="`correction-quantity-${item.id}`" class="form-label">
+                                  Nueva cantidad
+                                </label>
+                                <input
+                                  :id="`correction-quantity-${item.id}`"
+                                  v-model.number="orderPartCorrectionForms[item.id].quantity"
+                                  type="number"
+                                  min="1"
+                                  step="1"
+                                  class="form-control"
+                                  :disabled="isOrderPartCorrectionSaving(item.id)"
+                                  required
+                                >
+                                <div class="form-text">Cantidad actual: {{ item.quantity }}</div>
+                              </div>
+
+                              <div v-else class="col-md-5">
+                                <label :for="`correction-note-${item.id}`" class="form-label">
+                                  Nueva nota
+                                </label>
+                                <textarea
+                                  :id="`correction-note-${item.id}`"
+                                  v-model="orderPartCorrectionForms[item.id].note"
+                                  class="form-control"
+                                  rows="2"
+                                  maxlength="250"
+                                  :disabled="isOrderPartCorrectionSaving(item.id)"
+                                ></textarea>
+                              </div>
+
+                              <div class="col-md">
+                                <label :for="`correction-reason-${item.id}`" class="form-label">
+                                  Motivo de la corrección
+                                </label>
+                                <textarea
+                                  :id="`correction-reason-${item.id}`"
+                                  v-model="orderPartCorrectionForms[item.id].reason"
+                                  class="form-control"
+                                  rows="2"
+                                  :disabled="isOrderPartCorrectionSaving(item.id)"
+                                  placeholder="Explica por qué se corrige este registro."
+                                  required
+                                ></textarea>
+                              </div>
+                            </div>
+
+                            <div class="mt-3 d-flex flex-wrap gap-2">
+                              <button
+                                type="submit"
+                                class="btn btn-primary btn-sm"
+                                :disabled="isOrderPartCorrectionSaving(item.id)"
+                              >
+                                <span
+                                  v-if="isOrderPartCorrectionSaving(item.id)"
+                                  class="spinner-border spinner-border-sm me-2"
+                                ></span>
+                                {{
+                                  isOrderPartCorrectionSaving(item.id)
+                                    ? 'Guardando corrección...'
+                                    : 'Guardar corrección'
+                                }}
+                              </button>
+                              <button
+                                type="button"
+                                class="btn btn-outline-secondary btn-sm"
+                                :disabled="isOrderPartCorrectionSaving(item.id)"
+                                @click="orderPartCorrectionOpenId = null"
+                              >
+                                Cancelar
+                              </button>
+                            </div>
+                          </form>
+                        </div>
+                      </td>
+                    </tr>
+
+                    <tr
+                      v-if="
+                        canCorrectParts
+                        && Number(expandedOrderPartCorrectionHistoryId) === Number(item.id)
+                      "
+                    >
+                      <td colspan="5" class="bg-light">
+                        <div class="p-2">
+                          <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
+                            <h6 class="mb-0">Historial de correcciones</h6>
+                            <button
+                              type="button"
+                              class="btn btn-sm btn-outline-secondary"
+                              :disabled="orderPartCorrectionHistoryLoading[item.id]"
+                              @click="loadOrderPartCorrectionHistory(item.id)"
+                            >
+                              {{
+                                orderPartCorrectionHistoryLoading[item.id]
+                                  ? 'Actualizando...'
+                                  : 'Actualizar'
+                              }}
+                            </button>
+                          </div>
+
+                          <div
+                            v-if="orderPartCorrectionHistoryErrors[item.id]"
+                            class="alert alert-danger py-2"
+                            role="alert"
+                          >
+                            {{ orderPartCorrectionHistoryErrors[item.id] }}
+                          </div>
+                          <div
+                            v-else-if="orderPartCorrectionHistoryLoading[item.id]"
+                            class="text-muted small"
+                          >
+                            Cargando historial...
+                          </div>
+                          <div
+                            v-else-if="!(orderPartCorrectionHistoryById[item.id] || []).length"
+                            class="text-muted small"
+                          >
+                            Este uso todavía no tiene correcciones registradas.
+                          </div>
+                          <div v-else class="vstack gap-2">
+                            <div
+                              v-for="change in orderPartCorrectionHistoryById[item.id]"
+                              :key="change.id"
+                              class="border rounded bg-white p-3"
+                            >
+                              <div class="d-flex flex-wrap justify-content-between gap-2">
+                                <strong>{{ change.field_display || change.field_name }}</strong>
+                                <span class="small text-muted">{{ formatDate(change.changed_at) }}</span>
+                              </div>
+                              <div class="small mt-1">
+                                <span class="text-muted">Anterior:</span>
+                                {{ change.old_value === '' ? 'Sin nota' : change.old_value }}
+                                <span class="mx-1">→</span>
+                                <span class="text-muted">Nuevo:</span>
+                                {{ change.new_value === '' ? 'Sin nota' : change.new_value }}
+                              </div>
+                              <div class="small mt-1">
+                                <span class="text-muted">Motivo:</span> {{ change.reason }}
+                              </div>
+                              <div class="small text-muted mt-1">
+                                {{ change.changed_by_username || 'Usuario no disponible' }}
+                                <span v-if="change.changed_by_role"> · {{ change.changed_by_role }}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  </template>
                 </tbody>
                 <tfoot>
                   <tr class="fw-bold">
-                    <td colspan="3" class="text-end">Total de repuestos</td>
+                    <td :colspan="canCorrectParts ? 4 : 3" class="text-end">Total de repuestos</td>
                     <td class="text-end">{{ formatMoney(financial?.parts_cost ?? usedPartsTotal) }}</td>
                   </tr>
                 </tfoot>
@@ -3216,7 +3715,8 @@ watch(() => route.params.id, loadOrder, { immediate: true })
             <h5>Asociar repuesto a esta orden</h5>
             <p class="small text-muted">
               Registrar un uso descontará inmediatamente la cantidad del stock del catálogo.
-              Comprueba los datos antes de guardar; esta versión no incluye anulación del consumo.
+              Si luego detectas un error en la cantidad o nota, puedes corregirlo con trazabilidad.
+              La anulación completa del consumo corresponde al flujo de HU-25.
             </p>
             <div v-if="orderPartSuccess" class="alert alert-success" role="status">
               {{ orderPartSuccess }}
