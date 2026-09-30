@@ -15,6 +15,12 @@ from .views import (
     ServiceOrderListCreateView,
 )
 from .viability_views import OrderViabilityView
+from .warranty_request_views import (
+    WarrantyRequestDetailView,
+    WarrantyRequestHistoryView,
+    WarrantyRequestListCreateView,
+    WarrantyRequestsByWarrantyView,
+)
 from .warranty_summary_views import OrderWarrantySummaryListView
 from .warranty_views import (
     OrderWarrantyDetailView,
@@ -77,7 +83,7 @@ urlpatterns = [
         name="order-financial",
     ),
 
-    # HU-15: Garantías e historial de revisiones por orden.
+    # HU-15 / HU-21: Garantías e historial de revisiones por orden.
     path(
         "<int:pk>/warranties/",
         OrderWarrantyListCreateView.as_view(),
@@ -92,6 +98,28 @@ urlpatterns = [
         "<int:pk>/warranties/<int:warranty_id>/history/",
         OrderWarrantyHistoryView.as_view(),
         name="order-warranty-history",
+    ),
+
+    # HU-22: Solicitudes/reclamos asociados a garantías.
+    path(
+        "<int:pk>/warranty-requests/",
+        WarrantyRequestListCreateView.as_view(),
+        name="warranty-request-list-create",
+    ),
+    path(
+        "<int:pk>/warranty-requests/<int:request_id>/",
+        WarrantyRequestDetailView.as_view(),
+        name="warranty-request-detail",
+    ),
+    path(
+        "<int:pk>/warranty-requests/<int:request_id>/history/",
+        WarrantyRequestHistoryView.as_view(),
+        name="warranty-request-history",
+    ),
+    path(
+        "<int:pk>/warranties/<int:warranty_id>/requests/",
+        WarrantyRequestsByWarrantyView.as_view(),
+        name="warranty-requests-by-warranty",
     ),
 
     # HU-16: Evaluación e índice de viabilidad.

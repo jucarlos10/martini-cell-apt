@@ -828,3 +828,11 @@ class OrderViabilityAssessment(models.Model):
             f"Viabilidad - "
             f"{self.order.tracking_code}"
         )
+
+# HU-22: Solicitudes de garantía e historial de reclamos.
+# Se importan al final para que Django registre estos modelos sin
+# generar una dependencia circular antes de definir OrderWarranty.
+from .warranty_request_models import (  # noqa: E402, F401
+    WarrantyRequest,
+    WarrantyRequestHistory,
+)
