@@ -241,6 +241,7 @@ const warranties = ref([])
 const warrantyLoading = ref(false)
 const warrantyError = ref('')
 const warrantySaving = ref(false)
+const warrantyDeletingId = ref(null)
 const warrantyFormError = ref('')
 const warrantySuccess = ref('')
 const editingWarrantyId = ref(null)
@@ -289,6 +290,7 @@ function resetWarranties() {
   warrantyLoading.value = false
   warrantyError.value = ''
   warrantySaving.value = false
+  warrantyDeletingId.value = null
   warrantyFormError.value = ''
   warrantySuccess.value = ''
   editingWarrantyId.value = null
@@ -306,7 +308,7 @@ function resetWarrantyForm() {
 }
 
 function startEditWarranty(item) {
-  if (!canManageWarranties) return
+  if (!canManageWarranties || warrantyDeletingId.value !== null) return
   editingWarrantyId.value = item.id
   warrantyForm.value = {
     warranty_type: item.warranty_type,
@@ -415,7 +417,7 @@ async function toggleWarrantyHistory(warrantyId) {
 }
 
 async function saveWarranty() {
-  if (!order.value || !canManageWarranties || warrantySaving.value || warrantyLoading.value) return
+  if (!order.value || !canManageWarranties || warrantySaving.value || warrantyLoading.value || warrantyDeletingId.value !== null) return
   warrantyFormError.value = ''
   warrantySuccess.value = ''
 
@@ -498,6 +500,88 @@ async function saveWarranty() {
     }
   } finally {
     if (sequence === loadSequence) warrantySaving.value = false
+  }
+}
+
+
+// HU-21: eliminación segura de una garantía ingresada por error.
+async function deleteWarranty(item) {
+  if (
+    !order.value ||
+    !canManageWarranties ||
+    warrantyDeletingId.value !== null ||
+    warrantySaving.value ||
+    warrantyLoading.value
+  ) {
+    return
+  }
+
+  const warrantyLabel =
+    item.warranty_type_display ||
+    (
+      item.warranty_type === 'SERVICE'
+        ? 'Garantía del servicio'
+        : 'Garantía de repuesto'
+    )
+
+  const confirmed = window.confirm(
+    `¿Eliminar ${warrantyLabel} #${item.id}?\n\n` +
+    'Esta acción eliminará solamente la garantía seleccionada. ' +
+    'La orden, cliente, equipo, repuestos y proveedor asociados se conservarán.'
+  )
+
+  if (!confirmed) return
+
+  const orderId = order.value.id
+  const sequence = loadSequence
+
+  warrantyDeletingId.value = item.id
+  warrantyError.value = ''
+  warrantyFormError.value = ''
+  warrantySuccess.value = ''
+
+  try {
+    const response = await authenticatedFetch(
+      `/api/orders/${orderId}/warranties/${item.id}/`,
+      {
+        method: 'DELETE',
+      }
+    )
+
+    if (sequence !== loadSequence) return
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null)
+
+      throw new Error(
+        evidenceApiError(
+          data,
+          'No fue posible eliminar la garantía.'
+        )
+      )
+    }
+
+    expandedWarrantyHistoryId.value = null
+
+    await loadWarranties()
+
+    if (sequence !== loadSequence) return
+
+    resetWarrantyForm()
+
+    warrantySuccess.value =
+      'Garantía eliminada correctamente. ' +
+      'La orden y sus registros relacionados se conservaron.'
+  } catch (err) {
+    if (sequence === loadSequence) {
+      warrantyError.value =
+        err?.message ||
+        'Error al eliminar la garantía.'
+    }
+  } finally {
+    if (sequence === loadSequence) {
+      warrantyDeletingId.value = null
+    }
   }
 }
 
@@ -2391,7 +2475,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                 <button
                   type="button"
                   class="btn btn-sm btn-outline-secondary"
-                  :disabled="warrantyLoading || warrantySaving"
+                  :disabled="warrantyLoading || warrantySaving || warrantyDeletingId !== null"
                   @click="loadWarranties"
                 >
                   {{ warrantyLoading ? 'Actualizando...' : 'Actualizar' }}
@@ -2432,15 +2516,29 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                       v-if="canManageWarranties"
                       type="button"
                       class="btn btn-sm btn-outline-primary"
-                      :disabled="warrantySaving"
+                      :disabled="warrantySaving || warrantyDeletingId !== null"
                       @click="startEditWarranty(item)"
                     >
                       Modificar
                     </button>
                     <button
+                      v-if="canManageWarranties"
+                      type="button"
+                      class="btn btn-sm btn-outline-danger"
+                      :disabled="warrantySaving || warrantyDeletingId !== null"
+                      @click="deleteWarranty(item)"
+                    >
+                      <span
+                        v-if="warrantyDeletingId === item.id"
+                        class="spinner-border spinner-border-sm me-1"
+                        aria-hidden="true"
+                      ></span>
+                      {{ warrantyDeletingId === item.id ? 'Eliminando...' : 'Eliminar' }}
+                    </button>
+                    <button
                       type="button"
                       class="btn btn-sm btn-outline-secondary"
-                      :disabled="!!warrantyHistoryLoading[item.id]"
+                      :disabled="!!warrantyHistoryLoading[item.id] || warrantyDeletingId !== null"
                       @click="toggleWarrantyHistory(item.id)"
                     >
                       {{ expandedWarrantyHistoryId === item.id ? 'Ocultar historial' : 'Ver historial' }}
@@ -2576,11 +2674,11 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                   ></textarea>
                 </template>
                 <div class="d-flex flex-wrap gap-2">
-                  <button type="submit" class="btn btn-primary" :disabled="warrantySaving || warrantyLoading || (warrantyForm.warranty_type === 'PART' && !editingWarrantyId && (orderPartsLoading || !!orderPartsError || !availableWarrantyParts.length))">
+                  <button type="submit" class="btn btn-primary" :disabled="warrantySaving || warrantyLoading || warrantyDeletingId !== null || (warrantyForm.warranty_type === 'PART' && !editingWarrantyId && (orderPartsLoading || !!orderPartsError || !availableWarrantyParts.length))">
                     <span v-if="warrantySaving" class="spinner-border spinner-border-sm me-2"></span>
                     {{ warrantySaving ? 'Guardando...' : editingWarrantyId !== null ? 'Guardar cambios y revisión' : 'Registrar garantía' }}
                   </button>
-                  <button v-if="editingWarrantyId !== null" type="button" class="btn btn-outline-secondary" :disabled="warrantySaving" @click="resetWarrantyForm">
+                  <button v-if="editingWarrantyId !== null" type="button" class="btn btn-outline-secondary" :disabled="warrantySaving || warrantyDeletingId !== null" @click="resetWarrantyForm">
                     Cancelar edición
                   </button>
                 </div>

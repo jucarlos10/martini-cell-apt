@@ -1,5 +1,5 @@
-
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 
 from rest_framework import status
@@ -8,7 +8,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import OrderWarranty, ServiceOrder
+from .models import (
+    OrderWarranty,
+    OrderWarrantyHistory,
+    ServiceOrder,
+)
 from .warranty_serializers import (
     OrderWarrantyHistorySerializer,
     OrderWarrantyReadSerializer,
@@ -81,7 +85,10 @@ class OrderWarrantyListCreateView(APIView):
         warranties = (
             OrderWarranty.objects
             .filter(order=order)
-            .select_related("order_part__part", "order_part__supplier")
+            .select_related(
+                "order_part__part",
+                "order_part__supplier",
+            )
         )
 
         return Response(
@@ -120,6 +127,8 @@ class OrderWarrantyDetailView(APIView):
     """
     GET: consulta una garantía.
     PATCH: actualiza la garantía y crea una nueva revisión.
+    DELETE: elimina una garantía ingresada por error,
+    conservando evidencia histórica de la eliminación.
     """
 
     permission_classes = [IsAuthenticated]
@@ -173,6 +182,48 @@ class OrderWarrantyDetailView(APIView):
         return Response(
             result,
             status=status.HTTP_200_OK,
+        )
+
+    @transaction.atomic
+    def delete(self, request, pk, warranty_id):
+        denied = require_warranty_permission(request.user)
+        if denied:
+            return denied
+
+        warranty = get_object_or_404(
+            OrderWarranty.objects.select_for_update(),
+            pk=warranty_id,
+            order_id=pk,
+        )
+
+        last_revision = (
+            OrderWarrantyHistory.objects
+            .filter(warranty=warranty)
+            .order_by("-revision")
+            .values_list("revision", flat=True)
+            .first()
+        ) or 0
+
+        OrderWarrantyHistory.objects.create(
+            warranty=warranty,
+            revision=last_revision + 1,
+            action=OrderWarrantyHistory.Action.DELETED,
+            order=warranty.order,
+            warranty_type=warranty.warranty_type,
+            order_part=warranty.order_part,
+            is_applicable=warranty.is_applicable,
+            starts_on=warranty.starts_on,
+            ends_on=warranty.ends_on,
+            conditions=warranty.conditions,
+            change_note="Garantía eliminada por error.",
+            changed_by=request.user,
+            changed_by_username=request.user.get_username(),
+        )
+
+        warranty.delete()
+
+        return Response(
+            status=status.HTTP_204_NO_CONTENT,
         )
 
 

@@ -662,15 +662,18 @@ class OrderWarranty(models.Model):
         )
 
 
-# HU-15: Historial de creación y modificaciones de garantías.
+# HU-15 / HU-21: Historial de creación, modificación y eliminación de garantías.
 class OrderWarrantyHistory(models.Model):
     class Action(models.TextChoices):
         CREATED = "CREATED", "Creación"
         UPDATED = "UPDATED", "Actualización"
+        DELETED = "DELETED", "Eliminación"
 
     warranty = models.ForeignKey(
         OrderWarranty,
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="history",
     )
 
@@ -744,10 +747,18 @@ class OrderWarrantyHistory(models.Model):
         ]
 
     def __str__(self):
+        warranty_label = (
+            self.warranty_id
+            if self.warranty_id is not None
+            else "eliminada"
+        )
+
         return (
-            f"Garantía {self.warranty_id} - "
+            f"Garantía {warranty_label} - "
             f"revisión {self.revision}"
         )
+
+
 # HU-16: Evaluación manual que alimenta el índice de viabilidad.
 class OrderViabilityAssessment(models.Model):
     class Difficulty(models.TextChoices):
