@@ -1,4 +1,3 @@
-
 from django.db import transaction
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.shortcuts import get_object_or_404
@@ -12,7 +11,7 @@ from rest_framework.generics import (
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from accounts.permissions import IsAdminRole
+from accounts.permissions import CanManageOperationalRecord
 from orders.models import ServiceOrder
 from orders.serializers import ServiceOrderHistorySerializer
 
@@ -28,7 +27,10 @@ class EquipmentListCreateView(ListCreateAPIView):
         .order_by("-created_at")
     )
     serializer_class = EquipmentSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [
+        IsAuthenticated,
+        CanManageOperationalRecord,
+    ]
 
     def perform_create(self, serializer):
         serializer.save(
@@ -44,13 +46,10 @@ class EquipmentDetailView(RetrieveUpdateDestroyAPIView):
         .all()
     )
     serializer_class = EquipmentSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_permissions(self):
-        if self.request.method == "DELETE":
-            return [IsAdminRole()]
-
-        return super().get_permissions()
+    permission_classes = [
+        IsAuthenticated,
+        CanManageOperationalRecord,
+    ]
 
     def perform_update(self, serializer):
         serializer.save(

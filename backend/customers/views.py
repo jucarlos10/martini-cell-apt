@@ -1,5 +1,4 @@
-﻿
-from django.db import transaction
+﻿from django.db import transaction
 from django.db.models import Q
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.shortcuts import get_object_or_404
@@ -13,7 +12,10 @@ from rest_framework.generics import (
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from accounts.permissions import IsAdminRole
+from accounts.permissions import (
+    CanManageOperationalRecord,
+    IsAdminOrTechRole,
+)
 
 from .models import Client, ClientChangeHistory
 from .serializers import ClientChangeHistorySerializer, ClientSerializer
@@ -22,7 +24,10 @@ from .validators import normalize_rut
 
 class ClientListCreateView(ListCreateAPIView):
     serializer_class = ClientSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [
+        IsAuthenticated,
+        CanManageOperationalRecord,
+    ]
 
     def get_queryset(self):
         queryset = Client.objects.all().order_by("name")
@@ -54,13 +59,10 @@ class ClientListCreateView(ListCreateAPIView):
 class ClientDetailView(RetrieveUpdateDestroyAPIView):
     queryset = Client.objects.all()
     serializer_class = ClientSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_permissions(self):
-        if self.request.method == "DELETE":
-            return [IsAdminRole()]
-
-        return super().get_permissions()
+    permission_classes = [
+        IsAuthenticated,
+        CanManageOperationalRecord,
+    ]
 
     @transaction.atomic
     def perform_update(self, serializer):
@@ -171,7 +173,10 @@ class ClientDetailView(RetrieveUpdateDestroyAPIView):
 
 class ClientChangeHistoryListView(ListAPIView):
     serializer_class = ClientChangeHistorySerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [
+        IsAuthenticated,
+        IsAdminOrTechRole,
+    ]
 
     def get_queryset(self):
         return ClientChangeHistory.objects.filter(

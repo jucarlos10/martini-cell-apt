@@ -13,6 +13,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.permissions import (
+    CanManageOperationalRecord,
+    IsAdminOrTechRole,
+)
+
 from .models import (
     OrderEvidence,
     OrderStatusHistory,
@@ -147,7 +152,10 @@ class ServiceOrderListCreateView(ListCreateAPIView):
         .order_by("-received_at")
     )
     serializer_class = ServiceOrderSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [
+        IsAuthenticated,
+        CanManageOperationalRecord,
+    ]
 
     def perform_create(self, serializer):
         serializer.save(
@@ -162,7 +170,10 @@ class ServiceOrderDetailView(RetrieveUpdateAPIView):
         .all()
     )
     serializer_class = ServiceOrderSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [
+        IsAuthenticated,
+        CanManageOperationalRecord,
+    ]
 
 
 class OrderStatusView(APIView):
@@ -517,7 +528,10 @@ class OrderTechnicalReportView(APIView):
 
 
 class OrderTechnicalReportHistoryView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [
+        IsAuthenticated,
+        IsAdminOrTechRole,
+    ]
 
     def get(self, request, pk):
         order = get_object_or_404(
