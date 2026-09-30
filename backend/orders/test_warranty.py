@@ -1,9 +1,8 @@
-
 from datetime import timedelta
 from decimal import Decimal
 
-from django.utils import timezone
 from django.urls import reverse
+from django.utils import timezone
 
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -103,6 +102,10 @@ class OrderWarrantyTests(APITestCase):
             kwargs={"pk": self.order.pk},
         )
 
+        self.summary_url = reverse(
+            "order-warranty-summary-list",
+        )
+
         self.client.force_authenticate(user=self.admin)
 
     def service_payload(self, **changes):
@@ -118,10 +121,31 @@ class OrderWarrantyTests(APITestCase):
         payload.update(changes)
         return payload
 
+    def part_payload(self, **changes):
+        payload = {
+            "warranty_type": "PART",
+            "order_part": self.order_part.pk,
+            "is_applicable": True,
+            "starts_on": self.today.isoformat(),
+            "ends_on": (
+                self.today + timedelta(days=30)
+            ).isoformat(),
+            "conditions": "Garantía de pantalla.",
+        }
+        payload.update(changes)
+        return payload
+
     def create_service_warranty(self, **changes):
         return self.client.post(
             self.list_url,
             self.service_payload(**changes),
+            format="json",
+        )
+
+    def create_part_warranty(self, **changes):
+        return self.client.post(
+            self.list_url,
+            self.part_payload(**changes),
             format="json",
         )
 
@@ -162,20 +186,7 @@ class OrderWarrantyTests(APITestCase):
         )
 
     def test_part_warranty_uses_historical_supplier(self):
-        response = self.client.post(
-            self.list_url,
-            {
-                "warranty_type": "PART",
-                "order_part": self.order_part.pk,
-                "is_applicable": True,
-                "starts_on": self.today.isoformat(),
-                "ends_on": (
-                    self.today + timedelta(days=30)
-                ).isoformat(),
-                "conditions": "Garantía de pantalla.",
-            },
-            format="json",
-        )
+        response = self.create_part_warranty()
 
         self.assertEqual(
             response.status_code,
@@ -420,4 +431,321 @@ class OrderWarrantyTests(APITestCase):
         self.assertEqual(
             response.status_code,
             status.HTTP_401_UNAUTHORIZED,
+        )
+
+    # HU-21: eliminación segura de garantías.
+
+    def test_delete_service_warranty_preserves_history(self):
+        created = self.create_service_warranty()
+        warranty_id = created.data["id"]
+
+        response = self.client.delete(
+            self.detail_url(warranty_id)
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_204_NO_CONTENT,
+        )
+        self.assertFalse(
+            OrderWarranty.objects.filter(
+                pk=warranty_id
+            ).exists()
+        )
+
+        revisions = list(
+            OrderWarrantyHistory.objects.filter(
+                order=self.order
+            ).order_by("revision", "id")
+        )
+
+        self.assertEqual(len(revisions), 2)
+        self.assertEqual(revisions[0].action, "CREATED")
+        self.assertEqual(revisions[1].action, "DELETED")
+        self.assertEqual(revisions[1].revision, 2)
+        self.assertEqual(
+            revisions[1].changed_by,
+            self.admin,
+        )
+        self.assertEqual(
+            revisions[1].changed_by_username,
+            self.admin.username,
+        )
+        self.assertEqual(
+            revisions[1].change_note,
+            "Garantía eliminada por error.",
+        )
+
+        # Al eliminar la garantía, el historial permanece
+        # y deja de apuntar a un registro inexistente.
+        self.assertIsNone(revisions[0].warranty_id)
+        self.assertIsNone(revisions[1].warranty_id)
+
+    def test_deleted_warranty_disappears_from_order_and_summary(self):
+        created = self.create_service_warranty()
+        warranty_id = created.data["id"]
+
+        delete_response = self.client.delete(
+            self.detail_url(warranty_id)
+        )
+
+        self.assertEqual(
+            delete_response.status_code,
+            status.HTTP_204_NO_CONTENT,
+        )
+
+        order_response = self.client.get(self.list_url)
+        summary_response = self.client.get(self.summary_url)
+
+        self.assertEqual(
+            order_response.status_code,
+            status.HTTP_200_OK,
+        )
+        self.assertEqual(
+            summary_response.status_code,
+            status.HTTP_200_OK,
+        )
+        self.assertEqual(order_response.data, [])
+        self.assertEqual(summary_response.data, [])
+
+    def test_delete_service_warranty_keeps_order(self):
+        created = self.create_service_warranty()
+
+        response = self.client.delete(
+            self.detail_url(created.data["id"])
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_204_NO_CONTENT,
+        )
+        self.assertTrue(
+            ServiceOrder.objects.filter(
+                pk=self.order.pk
+            ).exists()
+        )
+        self.assertTrue(
+            Client.objects.filter(
+                pk=self.customer.pk
+            ).exists()
+        )
+        self.assertTrue(
+            Equipment.objects.filter(
+                pk=self.equipment.pk
+            ).exists()
+        )
+
+    def test_service_warranty_can_be_created_again_after_delete(self):
+        first = self.create_service_warranty()
+
+        delete_response = self.client.delete(
+            self.detail_url(first.data["id"])
+        )
+
+        self.assertEqual(
+            delete_response.status_code,
+            status.HTTP_204_NO_CONTENT,
+        )
+
+        second = self.create_service_warranty()
+
+        self.assertEqual(
+            second.status_code,
+            status.HTTP_201_CREATED,
+        )
+        self.assertEqual(
+            OrderWarranty.objects.filter(
+                order=self.order,
+                warranty_type="SERVICE",
+            ).count(),
+            1,
+        )
+
+    def test_delete_part_warranty_keeps_part_usage_and_supplier(self):
+        created = self.create_part_warranty()
+        warranty_id = created.data["id"]
+
+        response = self.client.delete(
+            self.detail_url(warranty_id)
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_204_NO_CONTENT,
+        )
+        self.assertFalse(
+            OrderWarranty.objects.filter(
+                pk=warranty_id
+            ).exists()
+        )
+        self.assertTrue(
+            OrderPart.objects.filter(
+                pk=self.order_part.pk
+            ).exists()
+        )
+        self.assertTrue(
+            Part.objects.filter(
+                pk=self.part.pk
+            ).exists()
+        )
+        self.assertTrue(
+            Supplier.objects.filter(
+                pk=self.supplier.pk
+            ).exists()
+        )
+        self.assertTrue(
+            ServiceOrder.objects.filter(
+                pk=self.order.pk
+            ).exists()
+        )
+
+    def test_delete_only_selected_warranty(self):
+        service = self.create_service_warranty()
+        part = self.create_part_warranty()
+
+        response = self.client.delete(
+            self.detail_url(service.data["id"])
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_204_NO_CONTENT,
+        )
+        self.assertFalse(
+            OrderWarranty.objects.filter(
+                pk=service.data["id"]
+            ).exists()
+        )
+        self.assertTrue(
+            OrderWarranty.objects.filter(
+                pk=part.data["id"]
+            ).exists()
+        )
+
+    def test_technician_can_delete_warranty(self):
+        created = self.create_service_warranty()
+        warranty_id = created.data["id"]
+
+        self.client.force_authenticate(
+            user=self.technician
+        )
+
+        response = self.client.delete(
+            self.detail_url(warranty_id)
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_204_NO_CONTENT,
+        )
+        self.assertFalse(
+            OrderWarranty.objects.filter(
+                pk=warranty_id
+            ).exists()
+        )
+
+        deleted_revision = (
+            OrderWarrantyHistory.objects
+            .filter(
+                order=self.order,
+                action="DELETED",
+            )
+            .get()
+        )
+
+        self.assertEqual(
+            deleted_revision.changed_by,
+            self.technician,
+        )
+        self.assertEqual(
+            deleted_revision.changed_by_username,
+            self.technician.username,
+        )
+
+    def test_helper_cannot_delete_warranty(self):
+        created = self.create_service_warranty()
+        warranty_id = created.data["id"]
+
+        self.client.force_authenticate(
+            user=self.helper
+        )
+
+        response = self.client.delete(
+            self.detail_url(warranty_id)
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+        self.assertTrue(
+            OrderWarranty.objects.filter(
+                pk=warranty_id
+            ).exists()
+        )
+        self.assertFalse(
+            OrderWarrantyHistory.objects.filter(
+                action="DELETED"
+            ).exists()
+        )
+
+    def test_anonymous_user_cannot_delete_warranty(self):
+        created = self.create_service_warranty()
+        warranty_id = created.data["id"]
+
+        self.client.force_authenticate(user=None)
+
+        response = self.client.delete(
+            self.detail_url(warranty_id)
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
+        self.assertTrue(
+            OrderWarranty.objects.filter(
+                pk=warranty_id
+            ).exists()
+        )
+
+    def test_delete_warranty_from_another_order_returns_404(self):
+        other_list_url = reverse(
+            "order-warranty-list-create",
+            kwargs={"pk": self.other_order.pk},
+        )
+
+        created = self.client.post(
+            other_list_url,
+            self.service_payload(),
+            format="json",
+        )
+
+        self.assertEqual(
+            created.status_code,
+            status.HTTP_201_CREATED,
+        )
+
+        response = self.client.delete(
+            self.detail_url(created.data["id"])
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+        self.assertTrue(
+            OrderWarranty.objects.filter(
+                pk=created.data["id"]
+            ).exists()
+        )
+
+    def test_delete_nonexistent_warranty_returns_404(self):
+        response = self.client.delete(
+            self.detail_url(999999)
+        )
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_404_NOT_FOUND,
         )
