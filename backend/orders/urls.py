@@ -18,6 +18,7 @@ from .viability_views import OrderViabilityView
 from .warranty_request_views import (
     WarrantyRequestAdminNoteView,
     WarrantyRequestDetailView,
+    WarrantyRequestEvidenceView,
     WarrantyRequestHistoryView,
     WarrantyRequestListCreateView,
     WarrantyRequestProposalView,
@@ -119,6 +120,11 @@ urlpatterns = [
         "<int:pk>/warranty-requests/<int:request_id>/history/",
         WarrantyRequestHistoryView.as_view(),
         name="warranty-request-history",
+    ),
+    path(
+        "<int:pk>/warranty-requests/<int:request_id>/evidence/",
+        WarrantyRequestEvidenceView.as_view(),
+        name="warranty-request-evidence",
     ),
     path(
         "<int:pk>/warranties/<int:warranty_id>/requests/",

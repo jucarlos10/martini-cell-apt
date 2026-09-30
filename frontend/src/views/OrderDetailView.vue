@@ -316,9 +316,13 @@ const warrantyRequestHistoryLoading = ref({})
 const warrantyRequestHistoryErrors = ref({})
 const expandedWarrantyRequestHistoryId = ref(null)
 const warrantyRequestFileInput = ref(null)
+const warrantyRequestImageUrls = ref({})
+const warrantyRequestImageLoading = ref({})
+const warrantyRequestImageErrors = ref({})
 let warrantyClaimRequestId = 0
 let warrantyClaimHistoryRequestId = 0
 let warrantyClaimHistoryLatestById = {}
+let warrantyClaimImageRequestId = 0
 
 // HU-23: propuesta técnica, revisión administrativa y resolución final.
 const warrantyActionOptions = [
@@ -865,9 +869,18 @@ async function deleteWarranty(item) {
 
 
 // HU-22: solicitudes de garantía e historial de cada reclamo.
+function releaseWarrantyRequestImages() {
+  ++warrantyClaimImageRequestId
+  Object.values(warrantyRequestImageUrls.value).forEach((url) => URL.revokeObjectURL(url))
+  warrantyRequestImageUrls.value = {}
+  warrantyRequestImageLoading.value = {}
+  warrantyRequestImageErrors.value = {}
+}
+
 function resetWarrantyRequests() {
   ++warrantyClaimRequestId
   ++warrantyClaimHistoryRequestId
+  releaseWarrantyRequestImages()
   warrantyClaimHistoryLatestById = {}
   warrantyRequests.value = []
   warrantyRequestsLoading.value = false
@@ -890,6 +903,48 @@ function resetWarrantyRequests() {
   warrantyAdminNoteForms.value = {}
 
   if (warrantyRequestFileInput.value) warrantyRequestFileInput.value.value = ''
+}
+
+async function toggleWarrantyRequestImage(item) {
+  const id = item.id
+  if (warrantyRequestImageUrls.value[id]) {
+    URL.revokeObjectURL(warrantyRequestImageUrls.value[id])
+    const urls = { ...warrantyRequestImageUrls.value }
+    delete urls[id]
+    warrantyRequestImageUrls.value = urls
+    return
+  }
+  if (warrantyRequestImageLoading.value[id] || !order.value || !item.evidence_download_url) return
+
+  const requestId = warrantyClaimImageRequestId
+  const orderId = order.value.id
+  warrantyRequestImageLoading.value = { ...warrantyRequestImageLoading.value, [id]: true }
+  warrantyRequestImageErrors.value = { ...warrantyRequestImageErrors.value, [id]: '' }
+
+  try {
+    const response = await authenticatedFetch(item.evidence_download_url)
+    if (!response.ok) throw new Error('No fue posible recuperar la fotografía.')
+    const blob = await response.blob()
+    if (!blob.type.startsWith('image/')) {
+      throw new Error('El servidor no devolvió una imagen válida.')
+    }
+    if (requestId !== warrantyClaimImageRequestId || order.value?.id !== orderId) return
+    warrantyRequestImageUrls.value = {
+      ...warrantyRequestImageUrls.value,
+      [id]: URL.createObjectURL(blob),
+    }
+  } catch (err) {
+    if (requestId === warrantyClaimImageRequestId && order.value?.id === orderId) {
+      warrantyRequestImageErrors.value = {
+        ...warrantyRequestImageErrors.value,
+        [id]: err?.message || 'Error al abrir la fotografía.',
+      }
+    }
+  } finally {
+    if (requestId === warrantyClaimImageRequestId && order.value?.id === orderId) {
+      warrantyRequestImageLoading.value = { ...warrantyRequestImageLoading.value, [id]: false }
+    }
+  }
 }
 
 async function loadWarrantyRequests() {
@@ -2472,7 +2527,9 @@ async function toggleEvidenceImage(item) {
 onBeforeUnmount(() => {
   ++evidenceRequestId
   ++viabilityRequestId
+  ++warrantyClaimRequestId
   releaseImageUrls()
+  releaseWarrantyRequestImages()
 })
 
 
@@ -4281,6 +4338,38 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                   <div class="small text-muted mt-2">
                     Evidencia adjunta: {{ requestItem.evidence ? 'Sí' : 'No' }} ·
                     Registrada: {{ formatDate(requestItem.created_at) }}
+                  </div>
+                  <div v-if="requestItem.evidence_download_url" class="mt-2">
+                    <div
+                      v-if="warrantyRequestImageErrors[requestItem.id]"
+                      class="alert alert-warning small mb-2"
+                      role="alert"
+                    >
+                      {{ warrantyRequestImageErrors[requestItem.id] }}
+                    </div>
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-outline-primary"
+                      :disabled="warrantyRequestImageLoading[requestItem.id]"
+                      @click="toggleWarrantyRequestImage(requestItem)"
+                    >
+                      {{ warrantyRequestImageLoading[requestItem.id] ? 'Cargando fotografía...' : warrantyRequestImageUrls[requestItem.id] ? 'Ocultar fotografía' : 'Ver fotografía' }}
+                    </button>
+                    <a
+                      v-if="warrantyRequestImageUrls[requestItem.id]"
+                      :href="warrantyRequestImageUrls[requestItem.id]"
+                      :download="`solicitud-garantia-${requestItem.id}`"
+                      class="btn btn-sm btn-outline-secondary ms-2"
+                    >
+                      Descargar
+                    </a>
+                    <img
+                      v-if="warrantyRequestImageUrls[requestItem.id]"
+                      :src="warrantyRequestImageUrls[requestItem.id]"
+                      :alt="`Evidencia de solicitud de garantía #${requestItem.id}`"
+                      class="img-fluid rounded border d-block mt-2"
+                      style="max-height: 360px; object-fit: contain;"
+                    >
                   </div>
 
                   <!-- HU-23: propuestas, resolución y acciones según el rol. -->
