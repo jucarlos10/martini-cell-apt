@@ -129,6 +129,10 @@ class OrderWarrantyDetailView(APIView):
     PATCH: actualiza la garantía y crea una nueva revisión.
     DELETE: elimina una garantía ingresada por error,
     conservando evidencia histórica de la eliminación.
+
+    Si la garantía ya tiene solicitudes/reclamos asociados,
+    no puede eliminarse porque esos registros forman parte
+    de la trazabilidad histórica de la atención.
     """
 
     permission_classes = [IsAuthenticated]
@@ -195,6 +199,20 @@ class OrderWarrantyDetailView(APIView):
             pk=warranty_id,
             order_id=pk,
         )
+
+        # HU-22: una garantía que ya posee solicitudes/reclamos
+        # no puede eliminarse. De hacerlo se perdería la relación
+        # necesaria para consultar la trazabilidad del reclamo.
+        if warranty.requests.exists():
+            return Response(
+                {
+                    "detail": (
+                        "No se puede eliminar esta garantía porque "
+                        "tiene solicitudes de garantía asociadas."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
 
         last_revision = (
             OrderWarrantyHistory.objects

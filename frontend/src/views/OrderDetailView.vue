@@ -253,6 +253,72 @@ let warrantyRequestId = 0
 let warrantyHistoryRequestId = 0
 let warrantyHistoryLatestById = {}
 
+// HU-22: solicitudes/reclamos asociados a una garantía existente.
+const warrantyRequests = ref([])
+const warrantyRequestsLoading = ref(false)
+const warrantyRequestsError = ref('')
+const warrantyRequestSaving = ref(false)
+const warrantyRequestFormError = ref('')
+const warrantyRequestSuccess = ref('')
+const warrantyRequestHistoryById = ref({})
+const warrantyRequestHistoryLoading = ref({})
+const warrantyRequestHistoryErrors = ref({})
+const expandedWarrantyRequestHistoryId = ref(null)
+const warrantyRequestFileInput = ref(null)
+let warrantyClaimRequestId = 0
+let warrantyClaimHistoryRequestId = 0
+let warrantyClaimHistoryLatestById = {}
+
+function localDateInputValue() {
+  const now = new Date()
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000)
+  return local.toISOString().slice(0, 10)
+}
+
+function emptyWarrantyRequestForm() {
+  return {
+    warranty: '',
+    requested_on: localDateInputValue(),
+    problem_description: '',
+    concurrent_open_reason: '',
+    evidence: null,
+  }
+}
+
+const warrantyRequestForm = ref(emptyWarrantyRequestForm())
+
+const selectedWarrantyForRequest = computed(() =>
+  warranties.value.find(
+    (item) => Number(item.id) === Number(warrantyRequestForm.value.warranty)
+  ) || null
+)
+
+const pendingWarrantyRequestExists = computed(() => {
+  const warrantyId = Number(warrantyRequestForm.value.warranty)
+  if (!warrantyId) return false
+
+  return warrantyRequests.value.some(
+    (item) =>
+      Number(item.warranty) === warrantyId &&
+      item.status === 'PENDING'
+  )
+})
+
+const warrantyRequestBlockedReason = computed(() => {
+  const warranty = selectedWarrantyForRequest.value
+  if (!warranty) return ''
+
+  if (warranty.status === 'NOT_APPLICABLE') {
+    return 'Esta garantía está marcada como «No aplica», por lo que no puede recibir solicitudes.'
+  }
+
+  if (warranty.status === 'NOT_STARTED') {
+    return 'La cobertura todavía no ha comenzado. No se puede ingresar una solicitud hasta su fecha de inicio.'
+  }
+
+  return ''
+})
+
 const warrantyStatusLabels = {
   ACTIVE: 'Vigente',
   EXPIRED: 'Vencida',
@@ -299,6 +365,7 @@ function resetWarranties() {
   warrantyHistoryLoading.value = {}
   warrantyHistoryErrors.value = {}
   expandedWarrantyHistoryId.value = null
+  resetWarrantyRequests()
 }
 
 function resetWarrantyForm() {
@@ -342,6 +409,23 @@ function warrantyPartDescription(id) {
   return usage ? `${usage.part_name} · ${usage.supplier_name}` : `Uso de repuesto #${id}`
 }
 
+function warrantyRequestCount(warrantyId) {
+  return warrantyRequests.value.filter(
+    (item) => Number(item.warranty) === Number(warrantyId)
+  ).length
+}
+
+function warrantyHasRequests(warrantyId) {
+  return warrantyRequestCount(warrantyId) > 0
+}
+
+function warrantyRequestStatusBadgeClass(status) {
+  if (status === 'PENDING') return 'bg-warning text-dark'
+  if (status === 'APPROVED' || status === 'ACCEPTED' || status === 'RESOLVED') return 'bg-success'
+  if (status === 'REJECTED' || status === 'CANCELLED') return 'bg-danger'
+  return 'bg-secondary'
+}
+
 async function loadWarranties() {
   if (!order.value || !canViewWarranties) return
   const orderId = order.value.id
@@ -361,6 +445,18 @@ async function loadWarranties() {
     warranties.value = Array.isArray(data) ? data : (data?.results || [])
     if (editingWarrantyId.value === null && serviceWarrantyExists.value && warrantyForm.value.warranty_type === 'SERVICE') {
       warrantyForm.value.warranty_type = 'PART'
+    }
+
+    const selectedRequestWarrantyStillExists = warranties.value.some(
+      (item) => Number(item.id) === Number(warrantyRequestForm.value.warranty)
+    )
+    if (!selectedRequestWarrantyStillExists) {
+      const preferredWarranty =
+        warranties.value.find((item) => ['ACTIVE', 'EXPIRED'].includes(item.status)) ||
+        warranties.value[0] ||
+        null
+      warrantyRequestForm.value.warranty = preferredWarranty?.id ?? ''
+      warrantyRequestForm.value.concurrent_open_reason = ''
     }
   } catch (err) {
     if (isCurrent()) {
@@ -516,6 +612,13 @@ async function deleteWarranty(item) {
     return
   }
 
+  if (warrantyHasRequests(item.id)) {
+    warrantyError.value =
+      'No se puede eliminar esta garantía porque tiene solicitudes asociadas. ' +
+      'La trazabilidad de esos reclamos debe conservarse.'
+    return
+  }
+
   const warrantyLabel =
     item.warranty_type_display ||
     (
@@ -581,6 +684,299 @@ async function deleteWarranty(item) {
   } finally {
     if (sequence === loadSequence) {
       warrantyDeletingId.value = null
+    }
+  }
+}
+
+
+// HU-22: solicitudes de garantía e historial de cada reclamo.
+function resetWarrantyRequests() {
+  ++warrantyClaimRequestId
+  ++warrantyClaimHistoryRequestId
+  warrantyClaimHistoryLatestById = {}
+  warrantyRequests.value = []
+  warrantyRequestsLoading.value = false
+  warrantyRequestsError.value = ''
+  warrantyRequestSaving.value = false
+  warrantyRequestFormError.value = ''
+  warrantyRequestSuccess.value = ''
+  warrantyRequestHistoryById.value = {}
+  warrantyRequestHistoryLoading.value = {}
+  warrantyRequestHistoryErrors.value = {}
+  expandedWarrantyRequestHistoryId.value = null
+  warrantyRequestForm.value = emptyWarrantyRequestForm()
+  if (warrantyRequestFileInput.value) warrantyRequestFileInput.value.value = ''
+}
+
+async function loadWarrantyRequests() {
+  if (!order.value || !canViewWarranties) return
+
+  const orderId = order.value.id
+  const sequence = loadSequence
+  const requestId = ++warrantyClaimRequestId
+  const isCurrent = () =>
+    sequence === loadSequence &&
+    requestId === warrantyClaimRequestId
+
+  warrantyRequestsLoading.value = true
+  warrantyRequestsError.value = ''
+
+  try {
+    const response = await getResponse(
+      `/api/orders/${orderId}/warranty-requests/`
+    )
+
+    if (!isCurrent()) return
+
+    if (!response.ok) {
+      throw new Error(
+        evidenceApiError(
+          response.data,
+          'No fue posible consultar las solicitudes de garantía.'
+        )
+      )
+    }
+
+    const data = response.data
+    warrantyRequests.value = Array.isArray(data)
+      ? data
+      : (data?.results || [])
+  } catch (err) {
+    if (isCurrent()) {
+      warrantyRequests.value = []
+      warrantyRequestsError.value =
+        err?.message ||
+        'Error al cargar las solicitudes de garantía.'
+    }
+  } finally {
+    if (isCurrent()) warrantyRequestsLoading.value = false
+  }
+}
+
+async function loadWarrantyRequestHistory(requestId) {
+  if (!order.value || !canViewWarranties) return
+
+  const orderId = order.value.id
+  const sequence = loadSequence
+  const historyRequestId = ++warrantyClaimHistoryRequestId
+  warrantyClaimHistoryLatestById[requestId] = historyRequestId
+  const isCurrent = () =>
+    sequence === loadSequence &&
+    warrantyClaimHistoryLatestById[requestId] === historyRequestId
+
+  warrantyRequestHistoryLoading.value = {
+    ...warrantyRequestHistoryLoading.value,
+    [requestId]: true,
+  }
+  warrantyRequestHistoryErrors.value = {
+    ...warrantyRequestHistoryErrors.value,
+    [requestId]: '',
+  }
+
+  try {
+    const response = await getResponse(
+      `/api/orders/${orderId}/warranty-requests/${requestId}/history/`
+    )
+
+    if (!isCurrent()) return
+
+    if (!response.ok) {
+      throw new Error(
+        evidenceApiError(
+          response.data,
+          'No fue posible consultar el historial de la solicitud.'
+        )
+      )
+    }
+
+    const data = response.data
+    warrantyRequestHistoryById.value = {
+      ...warrantyRequestHistoryById.value,
+      [requestId]: Array.isArray(data)
+        ? data
+        : (data?.results || []),
+    }
+  } catch (err) {
+    if (isCurrent()) {
+      warrantyRequestHistoryErrors.value = {
+        ...warrantyRequestHistoryErrors.value,
+        [requestId]:
+          err?.message ||
+          'Error al cargar el historial de la solicitud.',
+      }
+    }
+  } finally {
+    if (isCurrent()) {
+      warrantyRequestHistoryLoading.value = {
+        ...warrantyRequestHistoryLoading.value,
+        [requestId]: false,
+      }
+    }
+  }
+}
+
+async function toggleWarrantyRequestHistory(requestId) {
+  if (expandedWarrantyRequestHistoryId.value === requestId) {
+    expandedWarrantyRequestHistoryId.value = null
+    return
+  }
+
+  expandedWarrantyRequestHistoryId.value = requestId
+  await loadWarrantyRequestHistory(requestId)
+}
+
+async function selectWarrantyForRequest(item) {
+  warrantyRequestForm.value = {
+    ...emptyWarrantyRequestForm(),
+    warranty: item.id,
+  }
+  warrantyRequestFormError.value = ''
+  warrantyRequestSuccess.value = ''
+
+  await nextTick()
+  document.getElementById('warranty-request-problem')?.focus()
+}
+
+function selectWarrantyRequestEvidence(event) {
+  warrantyRequestForm.value.evidence =
+    event.target.files?.[0] || null
+  warrantyRequestFormError.value = ''
+  warrantyRequestSuccess.value = ''
+}
+
+async function saveWarrantyRequest() {
+  if (
+    !order.value ||
+    !canManageWarranties ||
+    warrantyRequestSaving.value ||
+    warrantyRequestsLoading.value
+  ) {
+    return
+  }
+
+  warrantyRequestFormError.value = ''
+  warrantyRequestSuccess.value = ''
+
+  const warranty = selectedWarrantyForRequest.value
+  if (!warranty) {
+    warrantyRequestFormError.value =
+      'Selecciona la garantía asociada a la solicitud.'
+    return
+  }
+
+  if (warrantyRequestBlockedReason.value) {
+    warrantyRequestFormError.value =
+      warrantyRequestBlockedReason.value
+    return
+  }
+
+  const description = String(
+    warrantyRequestForm.value.problem_description ?? ''
+  ).trim()
+
+  if (!description) {
+    warrantyRequestFormError.value =
+      'Describe el problema reportado por el cliente.'
+    return
+  }
+
+  const concurrentReason = String(
+    warrantyRequestForm.value.concurrent_open_reason ?? ''
+  ).trim()
+
+  if (pendingWarrantyRequestExists.value && !concurrentReason) {
+    warrantyRequestFormError.value =
+      'Ya existe una solicitud pendiente para esta garantía. ' +
+      'Indica el motivo para registrar otra.'
+    return
+  }
+
+  const file = warrantyRequestForm.value.evidence
+  if (file) {
+    if (!/\.(jpe?g|png|webp)$/i.test(file.name)) {
+      warrantyRequestFormError.value =
+        'La evidencia debe ser JPG, JPEG, PNG o WEBP.'
+      return
+    }
+
+    if (file.size > maxEvidenceSize) {
+      warrantyRequestFormError.value =
+        'La evidencia no puede superar los 20 MB.'
+      return
+    }
+  }
+
+  const orderId = order.value.id
+  const sequence = loadSequence
+  const selectedWarrantyId = warranty.id
+  const formData = new FormData()
+
+  formData.append('warranty', String(selectedWarrantyId))
+  formData.append(
+    'requested_on',
+    warrantyRequestForm.value.requested_on || localDateInputValue()
+  )
+  formData.append('problem_description', description)
+
+  if (concurrentReason) {
+    formData.append('concurrent_open_reason', concurrentReason)
+  }
+
+  if (file) {
+    formData.append('evidence', file)
+  }
+
+  warrantyRequestSaving.value = true
+
+  try {
+    // No se fija Content-Type: el navegador agrega el boundary multipart.
+    const response = await authenticatedFetch(
+      `/api/orders/${orderId}/warranty-requests/`,
+      {
+        method: 'POST',
+        body: formData,
+      }
+    )
+    const data = await response.json().catch(() => null)
+
+    if (sequence !== loadSequence) return
+
+    if (!response.ok) {
+      throw new Error(
+        evidenceApiError(
+          data,
+          'No fue posible registrar la solicitud de garantía.'
+        )
+      )
+    }
+
+    await loadWarrantyRequests()
+    if (sequence !== loadSequence) return
+
+    warrantyRequestForm.value = {
+      ...emptyWarrantyRequestForm(),
+      warranty: selectedWarrantyId,
+    }
+
+    if (warrantyRequestFileInput.value) {
+      warrantyRequestFileInput.value.value = ''
+    }
+
+    warrantyRequestSuccess.value = data?.coverage_warning
+      ? `Solicitud #${data.id} registrada. ${data.coverage_warning}`
+      : `Solicitud #${data.id} registrada correctamente.`
+
+    expandedWarrantyRequestHistoryId.value = data.id
+    await loadWarrantyRequestHistory(data.id)
+  } catch (err) {
+    if (sequence === loadSequence) {
+      warrantyRequestFormError.value =
+        err?.message ||
+        'Error al registrar la solicitud de garantía.'
+    }
+  } finally {
+    if (sequence === loadSequence) {
+      warrantyRequestSaving.value = false
     }
   }
 }
@@ -1112,7 +1508,11 @@ function selectTab(key) {
   if (key === 'linea' && order.value) refreshOrderTracking()
   if (key === 'repuestos' && order.value) refreshPartsAndFinancial()
   if (key === 'garantia' && order.value && canViewWarranties) {
-    Promise.allSettled([loadWarranties(), loadOrderParts()])
+    Promise.allSettled([
+      loadWarranties(),
+      loadOrderParts(),
+      loadWarrantyRequests(),
+    ])
   }
   if (key === 'viabilidad' && order.value && canViewViability) {
     loadViability()
@@ -2496,9 +2896,15 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                 <div v-for="item in warranties" :key="item.id" class="border rounded p-3">
                   <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
                     <strong>{{ item.warranty_type_display || (item.warranty_type === 'SERVICE' ? 'Garantía del servicio' : 'Garantía de repuesto') }} #{{ item.id }}</strong>
-                    <span class="badge" :class="warrantyBadgeClass(item.status)">
-                      {{ warrantyStatusLabels[item.status] || item.status }}
-                    </span>
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                      <span class="badge" :class="warrantyBadgeClass(item.status)">
+                        {{ warrantyStatusLabels[item.status] || item.status }}
+                      </span>
+                      <span class="badge bg-light text-dark border">
+                        {{ warrantyRequestCount(item.id) }}
+                        {{ warrantyRequestCount(item.id) === 1 ? 'solicitud' : 'solicitudes' }}
+                      </span>
+                    </div>
                   </div>
                   <div v-if="item.warranty_type === 'PART'" class="small mt-2">
                     <strong>Repuesto:</strong> {{ item.part_name || warrantyPartDescription(item.order_part) }}
@@ -2524,8 +2930,18 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                     <button
                       v-if="canManageWarranties"
                       type="button"
-                      class="btn btn-sm btn-outline-danger"
+                      class="btn btn-sm btn-outline-success"
                       :disabled="warrantySaving || warrantyDeletingId !== null"
+                      @click="selectWarrantyForRequest(item)"
+                    >
+                      Ingresar solicitud
+                    </button>
+                    <button
+                      v-if="canManageWarranties"
+                      type="button"
+                      class="btn btn-sm btn-outline-danger"
+                      :disabled="warrantySaving || warrantyDeletingId !== null || warrantyHasRequests(item.id)"
+                      :title="warrantyHasRequests(item.id) ? 'No se puede eliminar una garantía con solicitudes asociadas.' : 'Eliminar garantía'"
                       @click="deleteWarranty(item)"
                     >
                       <span
@@ -2543,6 +2959,9 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                     >
                       {{ expandedWarrantyHistoryId === item.id ? 'Ocultar historial' : 'Ver historial' }}
                     </button>
+                  </div>
+                  <div v-if="warrantyHasRequests(item.id)" class="small text-muted mt-2">
+                    Esta garantía tiene solicitudes asociadas y ya no puede eliminarse, para conservar su trazabilidad.
                   </div>
                   <div v-if="expandedWarrantyHistoryId === item.id" class="mt-3 border-top pt-3">
                     <h6>Historial de revisiones</h6>
@@ -2682,6 +3101,373 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                     Cancelar edición
                   </button>
                 </div>
+              </form>
+            </div>
+          </div>
+
+          <!-- HU-22: historial general de solicitudes/reclamos de garantía. -->
+          <div class="col-lg-7">
+            <div class="mc-card p-4">
+              <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                <h5 class="mb-0">Solicitudes de garantía</h5>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-secondary"
+                  :disabled="warrantyRequestsLoading || warrantyRequestSaving"
+                  @click="loadWarrantyRequests"
+                >
+                  {{ warrantyRequestsLoading ? 'Actualizando...' : 'Actualizar' }}
+                </button>
+              </div>
+
+              <p class="small text-muted">
+                Historial general de reclamos de esta orden. Cada solicitud conserva
+                la garantía asociada, el cliente registrado al momento del ingreso,
+                el responsable y su propio historial.
+              </p>
+
+              <div v-if="warrantyRequestsError" class="alert alert-danger" role="alert">
+                {{ warrantyRequestsError }}
+              </div>
+
+              <div v-if="warrantyRequestsLoading" class="text-muted">
+                Cargando solicitudes de garantía...
+              </div>
+
+              <div
+                v-else-if="!warrantyRequestsError && !warrantyRequests.length"
+                class="alert alert-info mb-0"
+                role="status"
+              >
+                Esta orden todavía no tiene solicitudes de garantía.
+              </div>
+
+              <div v-else class="d-flex flex-column gap-3">
+                <div
+                  v-for="requestItem in warrantyRequests"
+                  :key="requestItem.id"
+                  class="border rounded p-3"
+                >
+                  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                    <strong>
+                      Solicitud #{{ requestItem.id }} ·
+                      {{ requestItem.warranty_type_display || 'Garantía' }}
+                      #{{ requestItem.warranty }}
+                    </strong>
+                    <span
+                      class="badge"
+                      :class="warrantyRequestStatusBadgeClass(requestItem.status)"
+                    >
+                      {{ requestItem.status_display || requestItem.status }}
+                    </span>
+                  </div>
+
+                  <div
+                    v-if="requestItem.coverage_warning"
+                    class="alert alert-warning small py-2 mt-3 mb-2"
+                    role="alert"
+                  >
+                    {{ requestItem.coverage_warning }}
+                  </div>
+
+                  <div class="row g-2 small mt-2">
+                    <div class="col-sm-6">
+                      <strong>Fecha de solicitud:</strong>
+                      {{ formatWarrantyDate(requestItem.requested_on) }}
+                    </div>
+                    <div class="col-sm-6">
+                      <strong>Responsable de ingreso:</strong>
+                      {{ requestItem.created_by_username || 'Usuario no disponible' }}
+                    </div>
+                    <div class="col-sm-6">
+                      <strong>Cliente:</strong>
+                      {{ requestItem.client_name || 'No disponible' }}
+                    </div>
+                    <div class="col-sm-6">
+                      <strong>RUT:</strong>
+                      {{ requestItem.client_rut || 'No disponible' }}
+                    </div>
+                  </div>
+
+                  <div class="small mt-2" style="white-space: pre-wrap;">
+                    <strong>Problema reportado:</strong>
+                    {{ requestItem.problem_description }}
+                  </div>
+
+                  <div
+                    v-if="requestItem.concurrent_open_reason"
+                    class="small mt-2"
+                    style="white-space: pre-wrap;"
+                  >
+                    <strong>Motivo de nueva solicitud con otra pendiente:</strong>
+                    {{ requestItem.concurrent_open_reason }}
+                  </div>
+
+                  <div class="small text-muted mt-2">
+                    Evidencia adjunta: {{ requestItem.evidence ? 'Sí' : 'No' }} ·
+                    Registrada: {{ formatDate(requestItem.created_at) }}
+                  </div>
+
+                  <div class="mt-3">
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-outline-secondary"
+                      :disabled="!!warrantyRequestHistoryLoading[requestItem.id]"
+                      @click="toggleWarrantyRequestHistory(requestItem.id)"
+                    >
+                      {{
+                        expandedWarrantyRequestHistoryId === requestItem.id
+                          ? 'Ocultar historial'
+                          : 'Ver historial'
+                      }}
+                    </button>
+                  </div>
+
+                  <div
+                    v-if="expandedWarrantyRequestHistoryId === requestItem.id"
+                    class="mt-3 border-top pt-3"
+                  >
+                    <h6>Historial de la solicitud</h6>
+
+                    <div
+                      v-if="warrantyRequestHistoryLoading[requestItem.id]"
+                      class="text-muted small"
+                    >
+                      Cargando historial...
+                    </div>
+
+                    <div
+                      v-else-if="warrantyRequestHistoryErrors[requestItem.id]"
+                      class="alert alert-warning small"
+                      role="alert"
+                    >
+                      {{ warrantyRequestHistoryErrors[requestItem.id] }}
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-outline-secondary ms-2"
+                        @click="loadWarrantyRequestHistory(requestItem.id)"
+                      >
+                        Reintentar
+                      </button>
+                    </div>
+
+                    <div
+                      v-else-if="!warrantyRequestHistoryById[requestItem.id]?.length"
+                      class="text-muted small"
+                    >
+                      No hay eventos disponibles.
+                    </div>
+
+                    <div v-else class="d-flex flex-column gap-2">
+                      <div
+                        v-for="event in [...warrantyRequestHistoryById[requestItem.id]].reverse()"
+                        :key="event.id"
+                        class="border rounded p-2 small"
+                      >
+                        <div class="fw-semibold">
+                          Revisión #{{ event.revision }} ·
+                          {{ event.action_display || event.action }}
+                        </div>
+                        <div class="text-muted">
+                          {{ formatDate(event.changed_at) }} ·
+                          {{ event.changed_by_username || 'Usuario no disponible' }}
+                        </div>
+                        <div v-if="event.from_status" class="mt-1">
+                          <strong>Cambio de estado:</strong>
+                          {{ event.from_status_display || event.from_status }}
+                          →
+                          {{ event.to_status_display || event.to_status }}
+                        </div>
+                        <div v-else class="mt-1">
+                          <strong>Estado:</strong>
+                          {{ event.to_status_display || event.to_status }}
+                        </div>
+                        <div
+                          v-if="event.observation"
+                          class="mt-1"
+                          style="white-space: pre-wrap;"
+                        >
+                          <strong>Observación:</strong> {{ event.observation }}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- HU-22: ingreso de una solicitud de garantía. -->
+          <div class="col-lg-5">
+            <div id="warranty-request-form" class="mc-card p-4">
+              <h5>Ingresar solicitud de garantía</h5>
+              <p class="small text-muted">
+                El nombre y RUT del cliente se obtienen automáticamente desde la
+                orden. No es necesario volver a ingresarlos.
+              </p>
+
+              <div
+                v-if="warrantyRequestSuccess"
+                class="alert alert-success"
+                role="status"
+              >
+                {{ warrantyRequestSuccess }}
+              </div>
+
+              <div
+                v-if="warrantyRequestFormError"
+                class="alert alert-danger"
+                role="alert"
+              >
+                {{ warrantyRequestFormError }}
+              </div>
+
+              <div v-if="!canManageWarranties" class="alert alert-secondary mb-0">
+                Tu rol permite consultar solicitudes, pero no ingresarlas.
+              </div>
+
+              <form v-else @submit.prevent="saveWarrantyRequest">
+                <label for="warranty-request-warranty" class="form-label">
+                  Garantía asociada
+                </label>
+                <select
+                  id="warranty-request-warranty"
+                  v-model="warrantyRequestForm.warranty"
+                  class="form-select mb-2"
+                  :disabled="warrantyRequestSaving || warrantyLoading"
+                  required
+                  @change="warrantyRequestForm.concurrent_open_reason = ''"
+                >
+                  <option value="" disabled>Seleccionar garantía...</option>
+                  <option
+                    v-for="item in warranties"
+                    :key="item.id"
+                    :value="item.id"
+                  >
+                    {{
+                      item.warranty_type_display ||
+                      (item.warranty_type === 'SERVICE'
+                        ? 'Garantía del servicio'
+                        : 'Garantía de repuesto')
+                    }}
+                    #{{ item.id }} ·
+                    {{ warrantyStatusLabels[item.status] || item.status }}
+                  </option>
+                </select>
+
+                <div
+                  v-if="!warrantyLoading && !warranties.length"
+                  class="alert alert-info small"
+                >
+                  Primero debes registrar una garantía en esta orden.
+                </div>
+
+                <div
+                  v-if="warrantyRequestBlockedReason"
+                  class="alert alert-danger small"
+                  role="alert"
+                >
+                  {{ warrantyRequestBlockedReason }}
+                </div>
+
+                <div
+                  v-else-if="selectedWarrantyForRequest?.status === 'EXPIRED'"
+                  class="alert alert-warning small"
+                  role="alert"
+                >
+                  La cobertura está vencida. La solicitud se puede registrar,
+                  pero quedará identificada con esta advertencia.
+                </div>
+
+                <div
+                  v-if="pendingWarrantyRequestExists"
+                  class="alert alert-warning small"
+                  role="alert"
+                >
+                  Esta garantía ya tiene una solicitud pendiente. Puedes continuar
+                  trabajando con la solicitud existente en el listado o registrar
+                  otra. Si creas otra, debes justificar el motivo.
+                </div>
+
+                <label for="warranty-request-date" class="form-label">
+                  Fecha de solicitud
+                </label>
+                <input
+                  id="warranty-request-date"
+                  v-model="warrantyRequestForm.requested_on"
+                  type="date"
+                  class="form-control mb-3"
+                  :disabled="warrantyRequestSaving"
+                  required
+                >
+
+                <label for="warranty-request-problem" class="form-label">
+                  Problema reportado
+                </label>
+                <textarea
+                  id="warranty-request-problem"
+                  v-model="warrantyRequestForm.problem_description"
+                  class="form-control mb-3"
+                  rows="4"
+                  :disabled="warrantyRequestSaving"
+                  placeholder="Describe el problema informado por el cliente."
+                  required
+                ></textarea>
+
+                <template v-if="pendingWarrantyRequestExists">
+                  <label for="warranty-request-concurrent-reason" class="form-label">
+                    Motivo para abrir otra solicitud
+                  </label>
+                  <textarea
+                    id="warranty-request-concurrent-reason"
+                    v-model="warrantyRequestForm.concurrent_open_reason"
+                    class="form-control mb-3"
+                    rows="3"
+                    :disabled="warrantyRequestSaving"
+                    placeholder="Explica por qué se requiere un reclamo separado."
+                    required
+                  ></textarea>
+                </template>
+
+                <label for="warranty-request-evidence" class="form-label">
+                  Evidencia fotográfica
+                  <span class="text-muted">(opcional)</span>
+                </label>
+                <input
+                  id="warranty-request-evidence"
+                  ref="warrantyRequestFileInput"
+                  type="file"
+                  class="form-control mb-2"
+                  accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                  :disabled="warrantyRequestSaving"
+                  @change="selectWarrantyRequestEvidence"
+                >
+                <div class="form-text mb-3">
+                  Formatos permitidos: JPG, JPEG, PNG o WEBP. Máximo 20 MB.
+                </div>
+
+                <button
+                  type="submit"
+                  class="btn btn-primary"
+                  :disabled="
+                    warrantyRequestSaving ||
+                    warrantyRequestsLoading ||
+                    warrantyLoading ||
+                    !selectedWarrantyForRequest ||
+                    !!warrantyRequestBlockedReason
+                  "
+                >
+                  <span
+                    v-if="warrantyRequestSaving"
+                    class="spinner-border spinner-border-sm me-2"
+                    aria-hidden="true"
+                  ></span>
+                  {{
+                    warrantyRequestSaving
+                      ? 'Registrando...'
+                      : 'Registrar solicitud'
+                  }}
+                </button>
               </form>
             </div>
           </div>
