@@ -54,25 +54,57 @@ El desarrollo de la solución será incremental y las funcionalidades completada
 
 ## Estado del proyecto
 
-🚧 En desarrollo — Fase 1: Definición y diseño.
+🚧 MVP en desarrollo. El backend Django y el frontend Vue están integrados en
+`main`; los PR hacia esa rama ejecutan pruebas del backend y compilan el
+frontend en GitHub Actions. Esto no sustituye la validación funcional con
+Marcos. El avance de cada historia se registra en el
+[tablero Kanban](https://github.com/users/jucarlos10/projects/1).
 
 ## Documentación
 
-La documentación generada durante el proyecto será incorporada progresivamente al directorio `/docs`.
-
-La documentación se organizará de acuerdo con las distintas fases del Proyecto APT.
+Los documentos técnicos están en [`docs/`](docs/) y las evidencias académicas
+de la primera fase en [`fase 1/`](fase%201/).
 
 ## Estructura del repositorio
 
-La estructura del repositorio evolucionará durante el desarrollo del proyecto.
+La estructura actual es:
 
-Inicialmente se consideran los siguientes directorios:
+- [`backend/`](backend/) — API Django, modelos, migraciones y pruebas.
+- [`frontend/`](frontend/) — Aplicación Vue y Vite.
+- [`docs/`](docs/) — Decisiones y evidencias técnicas.
+- [`fase 1/`](fase%201/) — Evidencias académicas de la primera fase.
+- [`.github/workflows/`](.github/workflows/) — Pruebas y compilación automáticas.
 
-- `/docs` — Documentación académica y técnica.
-- `/src` — Código fuente de la plataforma.
-- `/tests` — Pruebas del sistema.
-- `/database` — Recursos relacionados con el modelo y estructura de datos.
-- `/data` — Datos anonimizados utilizados durante el proyecto.
+## Desarrollo local
+
+Se requieren Python 3.12, PostgreSQL y Node.js 20 (versiones usadas en los
+flujos de GitHub Actions). Configura una base de datos y un usuario local
+de PostgreSQL, copia `backend/.env.example` a `backend/.env` y reemplaza los
+valores de ejemplo, en particular la contraseña y `DJANGO_SECRET_KEY`.
+El archivo `.env` está excluido de Git.
+
+En una terminal, desde la raíz del repositorio:
+
+```bash
+python -m pip install -r backend/requirements.txt
+cd backend
+python manage.py migrate
+python manage.py runserver
+```
+
+En otra terminal:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Vite sirve la interfaz en `http://localhost:5173` y redirige `/api` a
+`http://127.0.0.1:8000` durante el desarrollo. Para usar otro backend local,
+define `API_PROXY_TARGET` en el entorno del frontend. Las verificaciones que
+corren en cada PR son `python manage.py test --noinput` dentro de `backend/`
+y `npm run build` dentro de `frontend/`.
 
 ## Versionado
 
