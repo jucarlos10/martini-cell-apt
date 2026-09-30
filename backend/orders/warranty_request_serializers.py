@@ -3,8 +3,11 @@ from rest_framework import serializers
 
 from .models import OrderWarranty
 from .warranty_request_models import (
+    WarrantyActionType,
     WarrantyRequest,
     WarrantyRequestHistory,
+    WarrantyRequestProposal,
+    WarrantyRequestResolution,
 )
 
 
@@ -101,7 +104,7 @@ class WarrantyRequestWriteSerializer(serializers.ModelSerializer):
 
         open_requests = WarrantyRequest.objects.filter(
             warranty=warranty,
-            status=WarrantyRequest.Status.PENDING,
+            status__in=WarrantyRequest.OPEN_STATUSES,
         )
 
         if self.instance is not None:
@@ -115,13 +118,195 @@ class WarrantyRequestWriteSerializer(serializers.ModelSerializer):
                     {
                         "concurrent_open_reason": (
                             "Esta garantía ya tiene una solicitud "
-                            "pendiente. Indica el motivo para registrar "
+                            "abierta. Indica el motivo para registrar "
                             "otra solicitud."
                         )
                     }
                 )
 
         return attrs
+
+
+class WarrantyRequestProposalWriteSerializer(serializers.Serializer):
+    """
+    HU-23: datos que TECH debe registrar al enviar
+    o reenviar una propuesta técnica.
+    """
+
+    technical_rationale = serializers.CharField(
+        trim_whitespace=True,
+    )
+
+    action_type = serializers.ChoiceField(
+        choices=WarrantyActionType.choices,
+    )
+
+    action_description = serializers.CharField(
+        trim_whitespace=True,
+    )
+
+    def validate_technical_rationale(self, value):
+        if not value.strip():
+            raise serializers.ValidationError(
+                "El fundamento técnico es obligatorio."
+            )
+        return value
+
+    def validate_action_description(self, value):
+        if not value.strip():
+            raise serializers.ValidationError(
+                "Describe la acción propuesta."
+            )
+        return value
+
+
+class WarrantyRequestProposalReadSerializer(serializers.ModelSerializer):
+    action_type_display = serializers.CharField(
+        source="get_action_type_display",
+        read_only=True,
+    )
+
+    class Meta:
+        model = WarrantyRequestProposal
+        fields = (
+            "id",
+            "request",
+            "revision",
+            "technical_rationale",
+            "action_type",
+            "action_type_display",
+            "action_description",
+            "proposed_by",
+            "proposed_by_username",
+            "proposed_by_role",
+            "proposed_at",
+        )
+
+
+class WarrantyRequestResolutionWriteSerializer(serializers.Serializer):
+    """
+    HU-23: decisión final que solo ADMIN puede registrar.
+    """
+
+    decision = serializers.ChoiceField(
+        choices=WarrantyRequestResolution.Decision.choices,
+    )
+
+    rationale = serializers.CharField(
+        trim_whitespace=True,
+    )
+
+    action_type = serializers.ChoiceField(
+        choices=WarrantyActionType.choices,
+        required=False,
+        allow_null=True,
+    )
+
+    action_description = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        trim_whitespace=True,
+    )
+
+    def validate_rationale(self, value):
+        if not value.strip():
+            raise serializers.ValidationError(
+                "El fundamento de la decisión es obligatorio."
+            )
+        return value
+
+    def validate(self, attrs):
+        decision = attrs.get("decision")
+
+        if decision == WarrantyRequestResolution.Decision.ACCEPTED:
+            if not attrs.get("action_type"):
+                raise serializers.ValidationError(
+                    {
+                        "action_type": (
+                            "Indica la acción realizada o autorizada."
+                        )
+                    }
+                )
+
+            description = attrs.get("action_description", "")
+            if not description.strip():
+                raise serializers.ValidationError(
+                    {
+                        "action_description": (
+                            "Describe la acción realizada o autorizada."
+                        )
+                    }
+                )
+
+        return attrs
+
+
+class WarrantyRequestResolutionReadSerializer(serializers.ModelSerializer):
+    decision_display = serializers.CharField(
+        source="get_decision_display",
+        read_only=True,
+    )
+
+    action_type_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WarrantyRequestResolution
+        fields = (
+            "id",
+            "request",
+            "decision",
+            "decision_display",
+            "rationale",
+            "action_type",
+            "action_type_display",
+            "action_description",
+            "resolved_by",
+            "resolved_by_username",
+            "resolved_by_role",
+            "resolved_at",
+        )
+
+    def get_action_type_display(self, obj):
+        if not obj.action_type:
+            return None
+        return obj.get_action_type_display()
+
+
+class WarrantyRequestReturnSerializer(serializers.Serializer):
+    """
+    HU-23: motivo obligatorio cuando ADMIN devuelve
+    una propuesta al técnico.
+    """
+
+    reason = serializers.CharField(
+        trim_whitespace=True,
+    )
+
+    def validate_reason(self, value):
+        if not value.strip():
+            raise serializers.ValidationError(
+                "Indica el motivo de la devolución al técnico."
+            )
+        return value
+
+
+class WarrantyRequestAdminNoteSerializer(serializers.Serializer):
+    """
+    HU-23: observación administrativa posterior.
+
+    No modifica una resolución final ni reabre la solicitud.
+    """
+
+    observation = serializers.CharField(
+        trim_whitespace=True,
+    )
+
+    def validate_observation(self, value):
+        if not value.strip():
+            raise serializers.ValidationError(
+                "La observación administrativa es obligatoria."
+            )
+        return value
 
 
 class WarrantyRequestReadSerializer(serializers.ModelSerializer):
@@ -166,6 +351,15 @@ class WarrantyRequestReadSerializer(serializers.ModelSerializer):
 
     has_other_open_request = serializers.SerializerMethodField()
 
+    proposals = WarrantyRequestProposalReadSerializer(
+        many=True,
+        read_only=True,
+    )
+
+    resolution = serializers.SerializerMethodField()
+
+    latest_proposal = serializers.SerializerMethodField()
+
     class Meta:
         model = WarrantyRequest
         fields = (
@@ -189,6 +383,9 @@ class WarrantyRequestReadSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "has_other_open_request",
+            "proposals",
+            "latest_proposal",
+            "resolution",
         )
 
     def get_coverage_warning(self, obj):
@@ -205,11 +402,26 @@ class WarrantyRequestReadSerializer(serializers.ModelSerializer):
             WarrantyRequest.objects
             .filter(
                 warranty_id=obj.warranty_id,
-                status=WarrantyRequest.Status.PENDING,
+                status__in=WarrantyRequest.OPEN_STATUSES,
             )
             .exclude(pk=obj.pk)
             .exists()
         )
+
+    def get_latest_proposal(self, obj):
+        proposal = obj.proposals.order_by("-revision", "-id").first()
+        if proposal is None:
+            return None
+
+        return WarrantyRequestProposalReadSerializer(proposal).data
+
+    def get_resolution(self, obj):
+        try:
+            resolution = obj.resolution
+        except WarrantyRequestResolution.DoesNotExist:
+            return None
+
+        return WarrantyRequestResolutionReadSerializer(resolution).data
 
 
 class WarrantyRequestHistorySerializer(serializers.ModelSerializer):
@@ -224,6 +436,7 @@ class WarrantyRequestHistorySerializer(serializers.ModelSerializer):
 
     from_status_display = serializers.SerializerMethodField()
     to_status_display = serializers.SerializerMethodField()
+    decision_display = serializers.SerializerMethodField()
 
     class Meta:
         model = WarrantyRequestHistory
@@ -238,8 +451,11 @@ class WarrantyRequestHistorySerializer(serializers.ModelSerializer):
             "to_status",
             "to_status_display",
             "observation",
+            "decision",
+            "decision_display",
             "changed_by",
             "changed_by_username",
+            "changed_by_role",
             "changed_at",
         )
 
@@ -256,4 +472,15 @@ class WarrantyRequestHistorySerializer(serializers.ModelSerializer):
         return dict(WarrantyRequest.Status.choices).get(
             obj.to_status,
             obj.to_status,
+        )
+
+    def get_decision_display(self, obj):
+        if not obj.decision:
+            return None
+
+        return dict(
+            WarrantyRequestResolution.Decision.choices
+        ).get(
+            obj.decision,
+            obj.decision,
         )
