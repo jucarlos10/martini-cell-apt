@@ -317,6 +317,7 @@ const warrantyRequestHistoryErrors = ref({})
 const expandedWarrantyRequestHistoryId = ref(null)
 const warrantyRequestFileInput = ref(null)
 const warrantyRequestImageUrls = ref({})
+const warrantyRequestImageFilenames = ref({})
 const warrantyRequestImageLoading = ref({})
 const warrantyRequestImageErrors = ref({})
 let warrantyClaimRequestId = 0
@@ -873,6 +874,7 @@ function releaseWarrantyRequestImages() {
   ++warrantyClaimImageRequestId
   Object.values(warrantyRequestImageUrls.value).forEach((url) => URL.revokeObjectURL(url))
   warrantyRequestImageUrls.value = {}
+  warrantyRequestImageFilenames.value = {}
   warrantyRequestImageLoading.value = {}
   warrantyRequestImageErrors.value = {}
 }
@@ -912,6 +914,9 @@ async function toggleWarrantyRequestImage(item) {
     const urls = { ...warrantyRequestImageUrls.value }
     delete urls[id]
     warrantyRequestImageUrls.value = urls
+    const filenames = { ...warrantyRequestImageFilenames.value }
+    delete filenames[id]
+    warrantyRequestImageFilenames.value = filenames
     return
   }
   if (warrantyRequestImageLoading.value[id] || !order.value || !item.evidence_download_url) return
@@ -925,13 +930,22 @@ async function toggleWarrantyRequestImage(item) {
     const response = await authenticatedFetch(item.evidence_download_url)
     if (!response.ok) throw new Error('No fue posible recuperar la fotografía.')
     const blob = await response.blob()
-    if (!blob.type.startsWith('image/')) {
+    const extension = {
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'image/webp': 'webp',
+    }[blob.type]
+    if (!extension) {
       throw new Error('El servidor no devolvió una imagen válida.')
     }
     if (requestId !== warrantyClaimImageRequestId || order.value?.id !== orderId) return
     warrantyRequestImageUrls.value = {
       ...warrantyRequestImageUrls.value,
       [id]: URL.createObjectURL(blob),
+    }
+    warrantyRequestImageFilenames.value = {
+      ...warrantyRequestImageFilenames.value,
+      [id]: `solicitud-garantia-${id}.${extension}`,
     }
   } catch (err) {
     if (requestId === warrantyClaimImageRequestId && order.value?.id === orderId) {
@@ -4358,7 +4372,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                     <a
                       v-if="warrantyRequestImageUrls[requestItem.id]"
                       :href="warrantyRequestImageUrls[requestItem.id]"
-                      :download="`solicitud-garantia-${requestItem.id}`"
+                      :download="warrantyRequestImageFilenames[requestItem.id]"
                       class="btn btn-sm btn-outline-secondary ms-2"
                     >
                       Descargar
