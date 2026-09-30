@@ -28,7 +28,6 @@ class Part(models.Model):
     """Repuesto disponible en el catálogo."""
 
     name = models.CharField(max_length=150)
-
     description = models.TextField(blank=True)
 
     supplier = models.ForeignKey(
@@ -41,13 +40,10 @@ class Part(models.Model):
         max_digits=12,
         decimal_places=2,
         default=Decimal("0.00"),
-        validators=[
-            MinValueValidator(Decimal("0.00")),
-        ],
+        validators=[MinValueValidator(Decimal("0.00"))],
     )
 
     stock = models.PositiveIntegerField(default=0)
-
     is_active = models.BooleanField(default=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -55,7 +51,6 @@ class Part(models.Model):
 
     class Meta:
         ordering = ["name", "id"]
-
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(unit_cost__gte=0),
@@ -73,6 +68,10 @@ class OrderPart(models.Model):
 
     Se conserva el proveedor y el costo unitario de la
     operación, aunque posteriormente cambie el catálogo.
+
+    HU-25 no elimina físicamente el registro cuando se anula
+    un uso de repuesto. La anulación queda trazada y el
+    registro histórico se conserva.
     """
 
     order = models.ForeignKey(
@@ -100,9 +99,7 @@ class OrderPart(models.Model):
     unit_cost = models.DecimalField(
         max_digits=12,
         decimal_places=2,
-        validators=[
-            MinValueValidator(Decimal("0.00")),
-        ],
+        validators=[MinValueValidator(Decimal("0.00"))],
     )
 
     note = models.CharField(
@@ -119,9 +116,37 @@ class OrderPart(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
 
+    is_cancelled = models.BooleanField(default=False)
+
+    cancellation_reason = models.TextField(blank=True)
+
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_parts_cancelled",
+    )
+
+    cancelled_by_username = models.CharField(
+        max_length=150,
+        blank=True,
+        editable=False,
+    )
+
+    cancelled_by_role = models.CharField(
+        max_length=20,
+        blank=True,
+        editable=False,
+    )
+
+    cancelled_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
     class Meta:
         ordering = ["created_at", "id"]
-
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(quantity__gte=1),
@@ -138,9 +163,10 @@ class OrderPart(models.Model):
         return self.quantity * self.unit_cost
 
     def __str__(self):
+        suffix = " [ANULADO]" if self.is_cancelled else ""
         return (
             f"Orden {self.order_id} - "
-            f"{self.part.name} x {self.quantity}"
+            f"{self.part.name} x {self.quantity}{suffix}"
         )
 
 
@@ -169,9 +195,7 @@ class OrderPartCorrectionHistory(models.Model):
     )
 
     old_value = models.TextField()
-
     new_value = models.TextField()
-
     reason = models.TextField()
 
     changed_by = models.ForeignKey(
@@ -179,6 +203,18 @@ class OrderPartCorrectionHistory(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         related_name="order_part_corrections",
+    )
+
+    changed_by_username = models.CharField(
+        max_length=150,
+        blank=True,
+        editable=False,
+    )
+
+    changed_by_role = models.CharField(
+        max_length=20,
+        blank=True,
+        editable=False,
     )
 
     changed_at = models.DateTimeField(auto_now_add=True)

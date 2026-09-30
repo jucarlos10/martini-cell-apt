@@ -13,6 +13,7 @@ const canEditReport = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canChangeStatus = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canRegisterParts = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canCorrectParts = ['ADMIN', 'TECH'].includes(currentUser?.role)
+const canCancelParts = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canViewFinancial = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canEditFinancial = currentUser?.role === 'ADMIN'
 const canViewWarranties = ['ADMIN', 'TECH'].includes(currentUser?.role)
@@ -116,7 +117,9 @@ const selectedPart = computed(() =>
   partCatalog.value.find((item) => Number(item.id) === Number(orderPartForm.value.part)) || null
 )
 const usedPartsTotal = computed(() =>
-  usedParts.value.reduce((total, item) => total + Number(item.subtotal || 0), 0)
+  usedParts.value
+    .filter((item) => !item.is_cancelled)
+    .reduce((total, item) => total + Number(item.subtotal || 0), 0)
 )
 let orderPartsRequestId = 0
 
@@ -163,6 +166,42 @@ function clearOrderPartCorrectionMessages(orderPartId) {
 
 function isOrderPartCorrectionSaving(orderPartId) {
   return Number(orderPartCorrectionSavingId.value) === Number(orderPartId)
+}
+
+// HU-25: anulación trazable de un uso de repuesto.
+const orderPartCancellationOpenId = ref(null)
+const orderPartCancellationForms = ref({})
+const orderPartCancellationSavingId = ref(null)
+const orderPartCancellationErrors = ref({})
+const orderPartCancellationSuccess = ref({})
+
+function emptyOrderPartCancellationForm() {
+  return {
+    reason: '',
+  }
+}
+
+function setOrderPartCancellationError(orderPartId, message) {
+  orderPartCancellationErrors.value = {
+    ...orderPartCancellationErrors.value,
+    [orderPartId]: message,
+  }
+}
+
+function setOrderPartCancellationSuccess(orderPartId, message) {
+  orderPartCancellationSuccess.value = {
+    ...orderPartCancellationSuccess.value,
+    [orderPartId]: message,
+  }
+}
+
+function clearOrderPartCancellationMessages(orderPartId) {
+  setOrderPartCancellationError(orderPartId, '')
+  setOrderPartCancellationSuccess(orderPartId, '')
+}
+
+function isOrderPartCancellationSaving(orderPartId) {
+  return Number(orderPartCancellationSavingId.value) === Number(orderPartId)
 }
 
 // HU-14: resumen calculado en Django y datos financieros editables por ADMIN.
@@ -505,7 +544,8 @@ const serviceWarrantyExists = computed(() =>
 )
 const availableWarrantyParts = computed(() =>
   usedParts.value.filter((usage) =>
-    !warranties.value.some((warranty) => Number(warranty.order_part) === Number(usage.id))
+    !usage.is_cancelled
+    && !warranties.value.some((warranty) => Number(warranty.order_part) === Number(usage.id))
   )
 )
 const emptyWarrantyForm = (type = 'SERVICE') => ({
@@ -1931,6 +1971,11 @@ function resetOrderParts() {
   orderPartCorrectionHistoryLoading.value = {}
   orderPartCorrectionHistoryErrors.value = {}
   expandedOrderPartCorrectionHistoryId.value = null
+  orderPartCancellationOpenId.value = null
+  orderPartCancellationForms.value = {}
+  orderPartCancellationSavingId.value = null
+  orderPartCancellationErrors.value = {}
+  orderPartCancellationSuccess.value = {}
 }
 
 async function loadOrderParts() {
@@ -2037,7 +2082,7 @@ async function registerOrderPart() {
 
 
 function toggleOrderPartCorrection(item) {
-  if (!canCorrectParts) return
+  if (!canCorrectParts || item.is_cancelled) return
 
   if (Number(orderPartCorrectionOpenId.value) === Number(item.id)) {
     orderPartCorrectionOpenId.value = null
@@ -2060,6 +2105,14 @@ async function submitOrderPartCorrection(item) {
   ) return
 
   clearOrderPartCorrectionMessages(item.id)
+
+  if (item.is_cancelled) {
+    setOrderPartCorrectionError(
+      item.id,
+      'No se puede corregir un uso de repuesto que ya fue anulado.'
+    )
+    return
+  }
 
   if (['DELIVERED', 'CLOSED'].includes(order.value.status)) {
     setOrderPartCorrectionError(
@@ -2252,6 +2305,113 @@ async function toggleOrderPartCorrectionHistory(item) {
 
   expandedOrderPartCorrectionHistoryId.value = item.id
   await loadOrderPartCorrectionHistory(item.id)
+}
+
+function toggleOrderPartCancellation(item) {
+  if (!canCancelParts || item.is_cancelled) return
+
+  if (Number(orderPartCancellationOpenId.value) === Number(item.id)) {
+    orderPartCancellationOpenId.value = null
+    return
+  }
+
+  orderPartCancellationForms.value = {
+    ...orderPartCancellationForms.value,
+    [item.id]: emptyOrderPartCancellationForm(),
+  }
+  clearOrderPartCancellationMessages(item.id)
+  orderPartCorrectionOpenId.value = null
+  orderPartCancellationOpenId.value = item.id
+}
+
+async function submitOrderPartCancellation(item) {
+  if (
+    !order.value
+    || !canCancelParts
+    || item.is_cancelled
+    || isOrderPartCancellationSaving(item.id)
+  ) {
+    return
+  }
+
+  clearOrderPartCancellationMessages(item.id)
+
+  if (['DELIVERED', 'CLOSED'].includes(order.value.status)) {
+    setOrderPartCancellationError(
+      item.id,
+      'No se pueden anular repuestos de una orden entregada o cerrada.'
+    )
+    return
+  }
+
+  const form = orderPartCancellationForms.value[item.id]
+  if (!form) return
+
+  const reason = String(form.reason ?? '').trim()
+  if (!reason) {
+    setOrderPartCancellationError(
+      item.id,
+      'Debes indicar el motivo de la anulación.'
+    )
+    return
+  }
+
+  const orderId = order.value.id
+  const sequence = loadSequence
+  orderPartCancellationSavingId.value = item.id
+
+  try {
+    const response = await authenticatedFetch(
+      `/api/inventory/orders/${orderId}/parts/${item.id}/cancellation/`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      }
+    )
+    const data = await response.json().catch(() => null)
+
+    if (sequence !== loadSequence) return
+
+    if (!response.ok) {
+      throw new Error(
+        evidenceApiError(data, 'No fue posible anular el repuesto registrado.')
+      )
+    }
+
+    const updatedUsage = data?.used_part
+    if (updatedUsage) {
+      usedParts.value = usedParts.value.map((usage) =>
+        Number(usage.id) === Number(updatedUsage.id) ? updatedUsage : usage
+      )
+    }
+
+    setOrderPartCancellationSuccess(
+      item.id,
+      'Uso de repuesto anulado. El stock y los costos vigentes fueron actualizados.'
+    )
+    orderPartCancellationOpenId.value = null
+    orderPartCorrectionOpenId.value = null
+
+    await loadOrderParts()
+    if (sequence === loadSequence && canViewFinancial) {
+      await loadFinancial()
+    }
+    if (sequence === loadSequence && canViewWarranties) {
+      await loadWarranties()
+    }
+  } catch (err) {
+    if (sequence === loadSequence) {
+      setOrderPartCancellationError(
+        item.id,
+        err?.message || 'Error al anular el repuesto registrado.'
+      )
+    }
+  } finally {
+    if (sequence === loadSequence) {
+      orderPartCancellationSavingId.value = null
+    }
+  }
 }
 
 
@@ -3459,33 +3619,89 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                     <th class="text-end">Cantidad</th>
                     <th class="text-end">Costo unitario</th>
                     <th class="text-end">Subtotal</th>
-                    <th v-if="canCorrectParts" class="text-end">Acciones</th>
+                    <th v-if="canCorrectParts || canCancelParts" class="text-end">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
                   <template v-for="item in usedParts" :key="item.id">
-                    <tr>
+                    <tr :class="{ 'table-secondary': item.is_cancelled }">
                       <td>
-                        <strong>{{ item.part_name }}</strong>
+                        <div class="d-flex flex-wrap align-items-center gap-2">
+                          <strong :class="{ 'text-decoration-line-through': item.is_cancelled }">
+                            {{ item.part_name }}
+                          </strong>
+                          <span v-if="item.is_cancelled" class="badge bg-secondary">
+                            ANULADO
+                          </span>
+                        </div>
                         <div class="small text-muted">{{ item.supplier_name }}</div>
                         <div class="small text-muted">
                           {{ formatDate(item.created_at) }} · {{ item.created_by_username || 'Usuario no disponible' }}
                         </div>
                         <div v-if="item.note" class="small mt-1">{{ item.note }}</div>
+                        <div v-if="item.is_cancelled" class="small text-muted mt-2">
+                          <div>
+                            <strong>Anulación:</strong>
+                            {{ item.cancellation_reason || 'Sin motivo disponible' }}
+                          </div>
+                          <div>
+                            {{ formatDate(item.cancelled_at) }} ·
+                            {{ item.cancelled_by_username || 'Usuario no disponible' }}
+                            <span v-if="item.cancelled_by_role"> · {{ item.cancelled_by_role }}</span>
+                          </div>
+                        </div>
+                        <div
+                          v-if="orderPartCancellationSuccess[item.id]"
+                          class="small text-success mt-2"
+                        >
+                          {{ orderPartCancellationSuccess[item.id] }}
+                        </div>
                       </td>
-                      <td class="text-end">{{ item.quantity }}</td>
-                      <td class="text-end">{{ formatMoney(item.unit_cost) }}</td>
-                      <td class="text-end">{{ formatMoney(item.subtotal) }}</td>
-                      <td v-if="canCorrectParts" class="text-end text-nowrap">
+                      <td class="text-end" :class="{ 'text-decoration-line-through': item.is_cancelled }">
+                        {{ item.quantity }}
+                      </td>
+                      <td class="text-end" :class="{ 'text-decoration-line-through': item.is_cancelled }">
+                        {{ formatMoney(item.unit_cost) }}
+                      </td>
+                      <td class="text-end">
+                        <span :class="{ 'text-decoration-line-through text-muted': item.is_cancelled }">
+                          {{ formatMoney(item.subtotal) }}
+                        </span>
+                        <div v-if="item.is_cancelled" class="small text-muted">No vigente</div>
+                      </td>
+                      <td v-if="canCorrectParts || canCancelParts" class="text-end text-nowrap">
                         <button
+                          v-if="canCorrectParts && !item.is_cancelled"
                           type="button"
                           class="btn btn-sm btn-outline-primary me-1"
-                          :disabled="['DELIVERED', 'CLOSED'].includes(order.status) || isOrderPartCorrectionSaving(item.id)"
+                          :disabled="
+                            ['DELIVERED', 'CLOSED'].includes(order.status)
+                            || isOrderPartCorrectionSaving(item.id)
+                            || isOrderPartCancellationSaving(item.id)
+                          "
                           @click="toggleOrderPartCorrection(item)"
                         >
                           {{ Number(orderPartCorrectionOpenId) === Number(item.id) ? 'Cerrar' : 'Corregir' }}
                         </button>
                         <button
+                          v-if="canCancelParts && !item.is_cancelled"
+                          type="button"
+                          class="btn btn-sm btn-outline-danger me-1"
+                          :disabled="
+                            ['DELIVERED', 'CLOSED'].includes(order.status)
+                            || isOrderPartCorrectionSaving(item.id)
+                            || isOrderPartCancellationSaving(item.id)
+                          "
+                          @click="toggleOrderPartCancellation(item)"
+                        >
+                          {{
+                            Number(orderPartCancellationOpenId) === Number(item.id)
+                              ? 'Cerrar anulación'
+                              : 'Anular'
+                          }}
+                        </button>
+                        <button
+                          v-if="canCorrectParts"
                           type="button"
                           class="btn btn-sm btn-outline-secondary"
                           :disabled="orderPartCorrectionHistoryLoading[item.id]"
@@ -3500,7 +3716,13 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                       </td>
                     </tr>
 
-                    <tr v-if="canCorrectParts && Number(orderPartCorrectionOpenId) === Number(item.id)">
+                    <tr
+                      v-if="
+                        canCorrectParts
+                        && !item.is_cancelled
+                        && Number(orderPartCorrectionOpenId) === Number(item.id)
+                      "
+                    >
                       <td colspan="5" class="bg-light">
                         <div class="p-2">
                           <h6 class="mb-2">Corregir uso de repuesto #{{ item.id }}</h6>
@@ -3627,6 +3849,83 @@ watch(() => route.params.id, loadOrder, { immediate: true })
 
                     <tr
                       v-if="
+                        canCancelParts
+                        && !item.is_cancelled
+                        && Number(orderPartCancellationOpenId) === Number(item.id)
+                      "
+                    >
+                      <td colspan="5" class="bg-light">
+                        <div class="p-2">
+                          <h6 class="mb-2 text-danger">
+                            Anular uso de repuesto #{{ item.id }}
+                          </h6>
+                          <p class="small text-muted mb-3">
+                            La anulación conserva el antecedente histórico, devuelve
+                            {{ item.quantity }} unidad(es) al stock y elimina este consumo
+                            de los costos vigentes. No se puede realizar si existe una
+                            garantía asociada o si la orden está entregada o cerrada.
+                          </p>
+
+                          <div
+                            v-if="orderPartCancellationErrors[item.id]"
+                            class="alert alert-danger py-2"
+                            role="alert"
+                          >
+                            {{ orderPartCancellationErrors[item.id] }}
+                          </div>
+
+                          <form
+                            v-if="orderPartCancellationForms[item.id]"
+                            @submit.prevent="submitOrderPartCancellation(item)"
+                          >
+                            <label
+                              :for="`cancellation-reason-${item.id}`"
+                              class="form-label"
+                            >
+                              Motivo de la anulación
+                            </label>
+                            <textarea
+                              :id="`cancellation-reason-${item.id}`"
+                              v-model="orderPartCancellationForms[item.id].reason"
+                              class="form-control"
+                              rows="3"
+                              :disabled="isOrderPartCancellationSaving(item.id)"
+                              placeholder="Explica por qué este uso de repuesto debe anularse."
+                              required
+                            ></textarea>
+
+                            <div class="mt-3 d-flex flex-wrap gap-2">
+                              <button
+                                type="submit"
+                                class="btn btn-danger btn-sm"
+                                :disabled="isOrderPartCancellationSaving(item.id)"
+                              >
+                                <span
+                                  v-if="isOrderPartCancellationSaving(item.id)"
+                                  class="spinner-border spinner-border-sm me-2"
+                                ></span>
+                                {{
+                                  isOrderPartCancellationSaving(item.id)
+                                    ? 'Anulando...'
+                                    : 'Confirmar anulación'
+                                }}
+                              </button>
+                              <button
+                                type="button"
+                                class="btn btn-outline-secondary btn-sm"
+                                :disabled="isOrderPartCancellationSaving(item.id)"
+                                @click="orderPartCancellationOpenId = null"
+                              >
+                                Cancelar
+                              </button>
+                            </div>
+                          </form>
+                        </div>
+                      </td>
+                    </tr>
+
+                    <tr
+                      v-if="
                         canCorrectParts
                         && Number(expandedOrderPartCorrectionHistoryId) === Number(item.id)
                       "
@@ -3701,7 +4000,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                 </tbody>
                 <tfoot>
                   <tr class="fw-bold">
-                    <td :colspan="canCorrectParts ? 4 : 3" class="text-end">Total de repuestos</td>
+                    <td :colspan="(canCorrectParts || canCancelParts) ? 4 : 3" class="text-end">Total de repuestos vigentes</td>
                     <td class="text-end">{{ formatMoney(financial?.parts_cost ?? usedPartsTotal) }}</td>
                   </tr>
                 </tfoot>
@@ -3716,7 +4015,8 @@ watch(() => route.params.id, loadOrder, { immediate: true })
             <p class="small text-muted">
               Registrar un uso descontará inmediatamente la cantidad del stock del catálogo.
               Si luego detectas un error en la cantidad o nota, puedes corregirlo con trazabilidad.
-              La anulación completa del consumo corresponde al flujo de HU-25.
+              También puedes anular completamente un consumo ingresado por error; el registro
+              histórico se conserva y el stock se devuelve una sola vez.
             </p>
             <div v-if="orderPartSuccess" class="alert alert-success" role="status">
               {{ orderPartSuccess }}
@@ -3818,7 +4118,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
               <div v-if="financialLoading" class="text-muted">Cargando resumen financiero...</div>
               <template v-else-if="financial">
                 <div v-if="!financial.has_financial_record" class="alert alert-info small" role="status">
-                  Aún no hay un registro financiero. El costo de los repuestos se calcula igualmente desde sus usos históricos.
+                  Aún no hay un registro financiero. El costo de los repuestos se calcula igualmente desde sus usos vigentes.
                 </div>
 
                 <div class="row g-3 mb-3">
@@ -3858,7 +4158,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                 <p class="small text-muted mb-0">
                   Costo directo total = repuestos + mano de obra + otros costos directos.
                   Margen estimado = precio cobrado − costo directo total. El porcentaje se calcula solo si el precio es mayor que cero.
-                  Los resultados proceden de Django y el costo de repuestos no se registra nuevamente aquí.
+                  Los resultados proceden de Django; los usos de repuesto anulados se conservan como historial, pero no se incluyen en el costo vigente.
                 </p>
 
                 <hr class="my-4">
