@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -482,6 +484,28 @@ class ClientManagementTests(APITestCase):
         self.assertFalse(
             ClientChangeHistory.objects.filter(
                 client=self.customer
+            ).exists()
+        )
+
+    def test_update_rolls_back_if_history_cannot_be_saved(self):
+        original_name = self.customer.name
+
+        with patch(
+            "customers.views.ClientChangeHistory.objects.create",
+            side_effect=RuntimeError("Fallo de escritura del historial"),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.client.patch(
+                    self.detail_url(self.customer),
+                    {"name": "Cambio sin historial"},
+                    format="json",
+                )
+
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.name, original_name)
+        self.assertFalse(
+            ClientChangeHistory.objects.filter(
+                client=self.customer,
             ).exists()
         )
 
