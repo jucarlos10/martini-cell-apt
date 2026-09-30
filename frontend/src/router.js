@@ -1,4 +1,3 @@
-
 import { createRouter, createWebHistory } from 'vue-router'
 
 import { getAuthenticatedUser, closeSession } from './services/auth'
@@ -27,10 +26,11 @@ const routes = [
   { path: '/ordenes/:id', component: OrderDetail },
   { path: '/clientes', component: Clients },
 
+  // HU-26: todos los perfiles autenticados pueden consultar repuestos.
+  // PartsView y la API restringen costos y acciones de gestión según el rol.
   {
     path: '/repuestos',
     component: Parts,
-    meta: { technical: true },
   },
   {
     path: '/garantias',

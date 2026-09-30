@@ -31,9 +31,16 @@ const showEquipmentForm = ref(false)
 const savingEquipment = ref(false)
 const equipmentFormError = ref('')
 
-// Las acciones destructivas solo se muestran a ADMIN.
-// El backend también comprueba los permisos en cada solicitud.
-const isAdmin = computed(() => getCurrentUser()?.role === 'ADMIN')
+// HU-26: la interfaz refleja la matriz de permisos.
+// El backend sigue siendo la fuente de verdad para autorizar cada solicitud.
+const currentRole = computed(() => getCurrentUser()?.role || '')
+const isAdmin = computed(() => currentRole.value === 'ADMIN')
+const canModifyOperationalRecords = computed(() =>
+  ['ADMIN', 'TECH'].includes(currentRole.value)
+)
+const canViewInternalHistory = computed(() =>
+  ['ADMIN', 'TECH'].includes(currentRole.value)
+)
 const deletingClientId = ref(null)
 const deletingEquipmentId = ref(null)
 const actionError = ref('')
@@ -273,7 +280,11 @@ async function loadHistory(clientId) {
   history.value = []
   historyError.value = ''
 
-  if (clientId === null || clientId === undefined) {
+  if (
+    clientId === null ||
+    clientId === undefined ||
+    !canViewInternalHistory.value
+  ) {
     historyLoading.value = false
     return
   }
@@ -500,7 +511,11 @@ function openForm() {
 
 // Abrir formulario para editar.
 function editClient(client) {
-  if (!client || isBusy.value) return
+  if (
+    !client ||
+    isBusy.value ||
+    !canModifyOperationalRecords.value
+  ) return
 
   editingId.value = client.id
 
@@ -533,6 +548,11 @@ async function saveClient() {
 
   const isEditing = editingId.value !== null
   const clientId = editingId.value
+
+  if (isEditing && !canModifyOperationalRecords.value) {
+    formError.value = 'No tienes permisos para modificar clientes.'
+    return
+  }
 
   saving.value = true
   formError.value = ''
@@ -576,8 +596,10 @@ async function saveClient() {
 
     selectedId.value = savedClient.id
 
-    // Recargar también el historial.
-    await loadHistory(savedClient.id)
+    // Recargar también el historial cuando el perfil tenga permiso.
+    if (canViewInternalHistory.value) {
+      await loadHistory(savedClient.id)
+    }
 
     success.value = isEditing
       ? 'Cliente actualizado correctamente.'
@@ -953,6 +975,7 @@ onMounted(() => {
 
             <div class="d-flex flex-wrap gap-2">
               <button
+                v-if="canModifyOperationalRecords"
                 type="button"
                 class="btn btn-outline-primary btn-sm"
                 :disabled="isBusy"
@@ -1307,86 +1330,88 @@ onMounted(() => {
             </div>
           </div>
 
-          <hr>
+          <template v-if="canViewInternalHistory">
+            <hr>
 
-          <!-- Historial de cambios de HU-04 -->
-          <h6 class="mb-3">
-            <i class="bi bi-clock-history me-1"></i>
-            Historial de modificaciones
-          </h6>
+            <!-- Historial de cambios de HU-04 / HU-26 -->
+            <h6 class="mb-3">
+              <i class="bi bi-clock-history me-1"></i>
+              Historial de modificaciones
+            </h6>
 
-          <div
-            v-if="historyLoading"
-            class="text-muted"
-          >
-            Cargando historial...
-          </div>
-
-          <div
-            v-else-if="historyError"
-            class="alert alert-danger"
-            role="alert"
-          >
-            {{ historyError }}
-
-            <button
-              class="btn btn-sm btn-outline-danger ms-2"
-              @click="loadHistory(selectedClient.id)"
-            >
-              Reintentar
-            </button>
-          </div>
-
-          <div
-            v-else-if="history.length === 0"
-            class="text-muted small"
-          >
-            Este cliente aún no tiene modificaciones registradas.
-          </div>
-
-          <div
-            v-else
-            class="d-flex flex-column gap-3"
-          >
             <div
-              v-for="entry in history"
-              :key="entry.id"
-              class="border rounded p-3"
+              v-if="historyLoading"
+              class="text-muted"
             >
-              <div class="small text-muted mb-2">
-                <i class="bi bi-calendar-event me-1"></i>
-                {{ formatDate(entry.changed_at) }}
+              Cargando historial...
+            </div>
 
-                <span class="ms-2">
-                  <i class="bi bi-person me-1"></i>
-                  {{
-                    entry.changed_by_username ||
-                    'Usuario no disponible'
-                  }}
-                </span>
-              </div>
+            <div
+              v-else-if="historyError"
+              class="alert alert-danger"
+              role="alert"
+            >
+              {{ historyError }}
 
-              <div
-                v-for="(change, field) in entry.changes"
-                :key="field"
-                class="small mb-2"
+              <button
+                class="btn btn-sm btn-outline-danger ms-2"
+                @click="loadHistory(selectedClient.id)"
               >
-                <strong>
-                  {{ fieldLabels[field] || field }}:
-                </strong>
+                Reintentar
+              </button>
+            </div>
 
-                <div class="text-muted">
-                  Anterior:
-                  {{ formatChangeValue(field, change.from) }}
+            <div
+              v-else-if="history.length === 0"
+              class="text-muted small"
+            >
+              Este cliente aún no tiene modificaciones registradas.
+            </div>
+
+            <div
+              v-else
+              class="d-flex flex-column gap-3"
+            >
+              <div
+                v-for="entry in history"
+                :key="entry.id"
+                class="border rounded p-3"
+              >
+                <div class="small text-muted mb-2">
+                  <i class="bi bi-calendar-event me-1"></i>
+                  {{ formatDate(entry.changed_at) }}
+
+                  <span class="ms-2">
+                    <i class="bi bi-person me-1"></i>
+                    {{
+                      entry.changed_by_username ||
+                      'Usuario no disponible'
+                    }}
+                  </span>
                 </div>
 
-                <div>
-                  Nuevo:
-                  {{ formatChangeValue(field, change.to) }}
+                <div
+                  v-for="(change, field) in entry.changes"
+                  :key="field"
+                  class="small mb-2"
+                >
+                  <strong>
+                    {{ fieldLabels[field] || field }}:
+                  </strong>
+
+                  <div class="text-muted">
+                    Anterior:
+                    {{ formatChangeValue(field, change.from) }}
+                  </div>
+
+                  <div>
+                    Nuevo:
+                    {{ formatChangeValue(field, change.to) }}
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          </template>
 
         </div>
 

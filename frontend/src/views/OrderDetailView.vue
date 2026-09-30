@@ -10,6 +10,7 @@ import { authenticatedFetch, getCurrentUser } from '../services/auth'
 const route = useRoute()
 const currentUser = getCurrentUser()
 const canEditReport = ['ADMIN', 'TECH'].includes(currentUser?.role)
+const canViewTechnicalReportHistory = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canChangeStatus = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canRegisterParts = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canCorrectParts = ['ADMIN', 'TECH'].includes(currentUser?.role)
@@ -2775,6 +2776,13 @@ function resetReportForm() {
 }
 
 async function loadTechnicalReportHistory(orderId, sequence) {
+  if (!canViewTechnicalReportHistory) {
+    technicalReportHistory.value = []
+    reportHistoryLoading.value = false
+    reportHistoryError.value = ''
+    return
+  }
+
   reportHistoryLoading.value = true
   reportHistoryError.value = ''
   try {
@@ -3068,7 +3076,9 @@ async function loadOrder() {
     // Fallar en una de estas consultas no oculta el detalle principal.
     await Promise.allSettled([
       loadTechnicians(sequence),
-      ...(technicalReport.value ? [loadTechnicalReportHistory(orderId, sequence)] : []),
+      ...(technicalReport.value && canViewTechnicalReportHistory
+        ? [loadTechnicalReportHistory(orderId, sequence)]
+        : []),
     ])
     if (sequence !== loadSequence) return
 
@@ -3235,7 +3245,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
 
       <!-- HU-09: diagnóstico, reparación e historial real -->
       <section v-if="tab === 'diagnostico'" class="row g-3">
-        <div class="col-lg-7">
+        <div :class="canViewTechnicalReportHistory ? 'col-lg-7' : 'col-12'">
           <div class="mc-card p-4">
             <h5>Diagnóstico y reparación</h5>
             <div class="small text-muted mb-3">
@@ -3383,7 +3393,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
           </div>
         </div>
 
-        <div class="col-lg-5">
+        <div v-if="canViewTechnicalReportHistory" class="col-lg-5">
           <div class="mc-card p-4">
             <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
               <h5 class="mb-0">Historial del informe</h5>
