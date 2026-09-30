@@ -3511,7 +3511,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                 {{ orderPartsLoading ? 'Actualizando...' : 'Actualizar' }}
               </button>
             </div>
-            <div class="small text-muted mb-3">
+            <div v-if="canViewFinancial" class="small text-muted mb-3">
               Orden #{{ order.id }} · {{ order.tracking_code }}. Los costos registrados aquí
               se conservan aunque cambie el catálogo.
             </div>
@@ -3528,8 +3528,8 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                   <tr>
                     <th>Repuesto / proveedor</th>
                     <th class="text-end">Cantidad</th>
-                    <th class="text-end">Costo unitario</th>
-                    <th class="text-end">Subtotal</th>
+                    <th v-if="canViewFinancial" class="text-end">Costo unitario</th>
+                    <th v-if="canViewFinancial" class="text-end">Subtotal</th>
                     <th v-if="canCorrectParts" class="text-end">Acciones</th>
                   </tr>
                 </thead>
@@ -3545,8 +3545,8 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                         <div v-if="item.note" class="small mt-1">{{ item.note }}</div>
                       </td>
                       <td class="text-end">{{ item.quantity }}</td>
-                      <td class="text-end">{{ formatMoney(item.unit_cost) }}</td>
-                      <td class="text-end">{{ formatMoney(item.subtotal) }}</td>
+                      <td v-if="canViewFinancial" class="text-end">{{ formatMoney(item.unit_cost) }}</td>
+                      <td v-if="canViewFinancial" class="text-end">{{ formatMoney(item.subtotal) }}</td>
                       <td v-if="canCorrectParts" class="text-end text-nowrap">
                         <button
                           type="button"
@@ -3770,7 +3770,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                     </tr>
                   </template>
                 </tbody>
-                <tfoot>
+                <tfoot v-if="canViewFinancial">
                   <tr class="fw-bold">
                     <td :colspan="canCorrectParts ? 4 : 3" class="text-end">Total de repuestos</td>
                     <td class="text-end">{{ formatMoney(financial?.parts_cost ?? usedPartsTotal) }}</td>
