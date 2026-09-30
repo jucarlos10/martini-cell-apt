@@ -16,6 +16,11 @@ const canViewFinancial = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canEditFinancial = currentUser?.role === 'ADMIN'
 const canViewWarranties = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canManageWarranties = ['ADMIN', 'TECH'].includes(currentUser?.role)
+
+// HU-23: el técnico propone y el administrador resuelve.
+const canProposeWarrantyResolution = currentUser?.role === 'TECH'
+const canAdminResolveWarrantyRequest = currentUser?.role === 'ADMIN'
+
 const canViewViability = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canManageViability = ['ADMIN', 'TECH'].includes(currentUser?.role)
 
@@ -269,6 +274,129 @@ let warrantyClaimRequestId = 0
 let warrantyClaimHistoryRequestId = 0
 let warrantyClaimHistoryLatestById = {}
 
+// HU-23: propuesta técnica, revisión administrativa y resolución final.
+const warrantyActionOptions = [
+  { value: 'REPAIR', label: 'Reparación' },
+  { value: 'PART_REPLACEMENT', label: 'Cambio de repuesto' },
+  { value: 'OTHER', label: 'Otra' },
+]
+
+const warrantyRequestActionSavingId = ref(null)
+const warrantyRequestActionErrors = ref({})
+const warrantyRequestActionSuccess = ref({})
+const warrantyProposalForms = ref({})
+const warrantyResolutionForms = ref({})
+const warrantyReturnForms = ref({})
+const warrantyAdminNoteForms = ref({})
+
+function emptyWarrantyProposalForm(requestItem = null) {
+  const previous = requestItem?.status === 'CHANGES_REQUESTED'
+    ? requestItem?.latest_proposal
+    : null
+
+  return {
+    technical_rationale: previous?.technical_rationale ?? '',
+    action_type: previous?.action_type ?? '',
+    action_description: previous?.action_description ?? '',
+  }
+}
+
+function emptyWarrantyResolutionForm(requestItem = null) {
+  const latestProposal = requestItem?.latest_proposal
+
+  return {
+    decision: '',
+    rationale: '',
+    action_type: latestProposal?.action_type ?? '',
+    action_description: latestProposal?.action_description ?? '',
+  }
+}
+
+function emptyWarrantyReturnForm() {
+  return {
+    reason: '',
+  }
+}
+
+function emptyWarrantyAdminNoteForm() {
+  return {
+    observation: '',
+  }
+}
+
+function ensureWarrantyRequestActionForms(items) {
+  const proposals = { ...warrantyProposalForms.value }
+  const resolutions = { ...warrantyResolutionForms.value }
+  const returns = { ...warrantyReturnForms.value }
+  const notes = { ...warrantyAdminNoteForms.value }
+
+  for (const item of items) {
+    if (!Object.prototype.hasOwnProperty.call(proposals, item.id)) {
+      proposals[item.id] = emptyWarrantyProposalForm(item)
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(resolutions, item.id)) {
+      resolutions[item.id] = emptyWarrantyResolutionForm(item)
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(returns, item.id)) {
+      returns[item.id] = emptyWarrantyReturnForm()
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(notes, item.id)) {
+      notes[item.id] = emptyWarrantyAdminNoteForm()
+    }
+  }
+
+  warrantyProposalForms.value = proposals
+  warrantyResolutionForms.value = resolutions
+  warrantyReturnForms.value = returns
+  warrantyAdminNoteForms.value = notes
+}
+
+function clearWarrantyRequestActionMessages(requestId) {
+  warrantyRequestActionErrors.value = {
+    ...warrantyRequestActionErrors.value,
+    [requestId]: '',
+  }
+  warrantyRequestActionSuccess.value = {
+    ...warrantyRequestActionSuccess.value,
+    [requestId]: '',
+  }
+}
+
+function setWarrantyRequestActionError(requestId, message) {
+  warrantyRequestActionErrors.value = {
+    ...warrantyRequestActionErrors.value,
+    [requestId]: message,
+  }
+}
+
+function setWarrantyRequestActionSuccess(requestId, message) {
+  warrantyRequestActionSuccess.value = {
+    ...warrantyRequestActionSuccess.value,
+    [requestId]: message,
+  }
+}
+
+function warrantyActionTypeLabel(value) {
+  return (
+    warrantyActionOptions.find((item) => item.value === value)?.label ||
+    value ||
+    'No indicada'
+  )
+}
+
+function warrantyResolutionAlertClass(decision) {
+  return decision === 'ACCEPTED'
+    ? 'alert-success'
+    : 'alert-danger'
+}
+
+function isWarrantyRequestActionSaving(requestId) {
+  return Number(warrantyRequestActionSavingId.value) === Number(requestId)
+}
+
 function localDateInputValue() {
   const now = new Date()
   const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000)
@@ -293,14 +421,14 @@ const selectedWarrantyForRequest = computed(() =>
   ) || null
 )
 
-const pendingWarrantyRequestExists = computed(() => {
+const openWarrantyRequestExists = computed(() => {
   const warrantyId = Number(warrantyRequestForm.value.warranty)
   if (!warrantyId) return false
 
   return warrantyRequests.value.some(
     (item) =>
       Number(item.warranty) === warrantyId &&
-      item.status === 'PENDING'
+      ['PENDING', 'AWAITING_APPROVAL', 'CHANGES_REQUESTED'].includes(item.status)
   )
 })
 
@@ -421,8 +549,9 @@ function warrantyHasRequests(warrantyId) {
 
 function warrantyRequestStatusBadgeClass(status) {
   if (status === 'PENDING') return 'bg-warning text-dark'
-  if (status === 'APPROVED' || status === 'ACCEPTED' || status === 'RESOLVED') return 'bg-success'
-  if (status === 'REJECTED' || status === 'CANCELLED') return 'bg-danger'
+  if (status === 'AWAITING_APPROVAL') return 'bg-info text-dark'
+  if (status === 'CHANGES_REQUESTED') return 'bg-warning text-dark'
+  if (status === 'RESOLVED') return 'bg-success'
   return 'bg-secondary'
 }
 
@@ -705,6 +834,15 @@ function resetWarrantyRequests() {
   warrantyRequestHistoryErrors.value = {}
   expandedWarrantyRequestHistoryId.value = null
   warrantyRequestForm.value = emptyWarrantyRequestForm()
+
+  warrantyRequestActionSavingId.value = null
+  warrantyRequestActionErrors.value = {}
+  warrantyRequestActionSuccess.value = {}
+  warrantyProposalForms.value = {}
+  warrantyResolutionForms.value = {}
+  warrantyReturnForms.value = {}
+  warrantyAdminNoteForms.value = {}
+
   if (warrantyRequestFileInput.value) warrantyRequestFileInput.value.value = ''
 }
 
@@ -738,9 +876,12 @@ async function loadWarrantyRequests() {
     }
 
     const data = response.data
-    warrantyRequests.value = Array.isArray(data)
+    const requestItems = Array.isArray(data)
       ? data
       : (data?.results || [])
+
+    ensureWarrantyRequestActionForms(requestItems)
+    warrantyRequests.value = requestItems
   } catch (err) {
     if (isCurrent()) {
       warrantyRequests.value = []
@@ -884,9 +1025,9 @@ async function saveWarrantyRequest() {
     warrantyRequestForm.value.concurrent_open_reason ?? ''
   ).trim()
 
-  if (pendingWarrantyRequestExists.value && !concurrentReason) {
+  if (openWarrantyRequestExists.value && !concurrentReason) {
     warrantyRequestFormError.value =
-      'Ya existe una solicitud pendiente para esta garantía. ' +
+      'Ya existe una solicitud abierta para esta garantía. ' +
       'Indica el motivo para registrar otra.'
     return
   }
@@ -977,6 +1118,440 @@ async function saveWarrantyRequest() {
   } finally {
     if (sequence === loadSequence) {
       warrantyRequestSaving.value = false
+    }
+  }
+}
+
+
+// HU-23: flujo de resolución de solicitudes de garantía.
+async function refreshWarrantyRequestAfterAction(requestId) {
+  await loadWarrantyRequests()
+
+  expandedWarrantyRequestHistoryId.value = requestId
+  await loadWarrantyRequestHistory(requestId)
+}
+
+async function submitWarrantyProposal(requestItem) {
+  if (
+    !order.value ||
+    !canProposeWarrantyResolution ||
+    isWarrantyRequestActionSaving(requestItem.id)
+  ) {
+    return
+  }
+
+  if (!['PENDING', 'CHANGES_REQUESTED'].includes(requestItem.status)) {
+    setWarrantyRequestActionError(
+      requestItem.id,
+      'La solicitud ya no está disponible para enviar una propuesta técnica.'
+    )
+    return
+  }
+
+  const form =
+    warrantyProposalForms.value[requestItem.id] ||
+    emptyWarrantyProposalForm(requestItem)
+
+  const technicalRationale = String(form.technical_rationale ?? '').trim()
+  const actionType = String(form.action_type ?? '').trim()
+  const actionDescription = String(form.action_description ?? '').trim()
+
+  clearWarrantyRequestActionMessages(requestItem.id)
+
+  if (!technicalRationale) {
+    setWarrantyRequestActionError(
+      requestItem.id,
+      'El fundamento técnico es obligatorio.'
+    )
+    return
+  }
+
+  if (!['REPAIR', 'PART_REPLACEMENT', 'OTHER'].includes(actionType)) {
+    setWarrantyRequestActionError(
+      requestItem.id,
+      'Selecciona la acción propuesta.'
+    )
+    return
+  }
+
+  if (!actionDescription) {
+    setWarrantyRequestActionError(
+      requestItem.id,
+      'Describe la acción propuesta.'
+    )
+    return
+  }
+
+  const sequence = loadSequence
+  const orderId = order.value.id
+  warrantyRequestActionSavingId.value = requestItem.id
+
+  try {
+    const response = await authenticatedFetch(
+      `/api/orders/${orderId}/warranty-requests/${requestItem.id}/proposal/`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          technical_rationale: technicalRationale,
+          action_type: actionType,
+          action_description: actionDescription,
+        }),
+      }
+    )
+
+    const data = await response.json().catch(() => null)
+
+    if (sequence !== loadSequence) return
+
+    if (!response.ok) {
+      throw new Error(
+        evidenceApiError(
+          data,
+          'No fue posible enviar la propuesta técnica.'
+        )
+      )
+    }
+
+    warrantyProposalForms.value = {
+      ...warrantyProposalForms.value,
+      [requestItem.id]: emptyWarrantyProposalForm(),
+    }
+
+    await refreshWarrantyRequestAfterAction(requestItem.id)
+
+    if (sequence !== loadSequence) return
+
+    setWarrantyRequestActionSuccess(
+      requestItem.id,
+      data?.proposal?.revision
+        ? `Propuesta técnica #${data.proposal.revision} enviada para aprobación.`
+        : 'Propuesta técnica enviada para aprobación.'
+    )
+  } catch (err) {
+    if (sequence === loadSequence) {
+      setWarrantyRequestActionError(
+        requestItem.id,
+        err?.message || 'Error al enviar la propuesta técnica.'
+      )
+    }
+  } finally {
+    if (
+      sequence === loadSequence &&
+      isWarrantyRequestActionSaving(requestItem.id)
+    ) {
+      warrantyRequestActionSavingId.value = null
+    }
+  }
+}
+
+async function returnWarrantyRequestToTech(requestItem) {
+  if (
+    !order.value ||
+    !canAdminResolveWarrantyRequest ||
+    isWarrantyRequestActionSaving(requestItem.id)
+  ) {
+    return
+  }
+
+  if (requestItem.status !== 'AWAITING_APPROVAL') {
+    setWarrantyRequestActionError(
+      requestItem.id,
+      'Solo se puede devolver una solicitud pendiente de aprobación.'
+    )
+    return
+  }
+
+  const form =
+    warrantyReturnForms.value[requestItem.id] ||
+    emptyWarrantyReturnForm()
+
+  const reason = String(form.reason ?? '').trim()
+
+  clearWarrantyRequestActionMessages(requestItem.id)
+
+  if (!reason) {
+    setWarrantyRequestActionError(
+      requestItem.id,
+      'Indica el motivo de la devolución al técnico.'
+    )
+    return
+  }
+
+  const sequence = loadSequence
+  const orderId = order.value.id
+  warrantyRequestActionSavingId.value = requestItem.id
+
+  try {
+    const response = await authenticatedFetch(
+      `/api/orders/${orderId}/warranty-requests/${requestItem.id}/return/`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      }
+    )
+
+    const data = await response.json().catch(() => null)
+
+    if (sequence !== loadSequence) return
+
+    if (!response.ok) {
+      throw new Error(
+        evidenceApiError(
+          data,
+          'No fue posible devolver la solicitud al técnico.'
+        )
+      )
+    }
+
+    warrantyReturnForms.value = {
+      ...warrantyReturnForms.value,
+      [requestItem.id]: emptyWarrantyReturnForm(),
+    }
+
+    await refreshWarrantyRequestAfterAction(requestItem.id)
+
+    if (sequence !== loadSequence) return
+
+    setWarrantyRequestActionSuccess(
+      requestItem.id,
+      'Solicitud devuelta al técnico para correcciones.'
+    )
+  } catch (err) {
+    if (sequence === loadSequence) {
+      setWarrantyRequestActionError(
+        requestItem.id,
+        err?.message || 'Error al devolver la solicitud.'
+      )
+    }
+  } finally {
+    if (
+      sequence === loadSequence &&
+      isWarrantyRequestActionSaving(requestItem.id)
+    ) {
+      warrantyRequestActionSavingId.value = null
+    }
+  }
+}
+
+async function resolveWarrantyRequest(requestItem) {
+  if (
+    !order.value ||
+    !canAdminResolveWarrantyRequest ||
+    isWarrantyRequestActionSaving(requestItem.id)
+  ) {
+    return
+  }
+
+  if (requestItem.status === 'RESOLVED') {
+    setWarrantyRequestActionError(
+      requestItem.id,
+      'La solicitud ya fue resuelta.'
+    )
+    return
+  }
+
+  const form =
+    warrantyResolutionForms.value[requestItem.id] ||
+    emptyWarrantyResolutionForm(requestItem)
+
+  const decision = String(form.decision ?? '').trim()
+  const rationale = String(form.rationale ?? '').trim()
+  const actionType = String(form.action_type ?? '').trim()
+  const actionDescription = String(form.action_description ?? '').trim()
+
+  clearWarrantyRequestActionMessages(requestItem.id)
+
+  if (!['ACCEPTED', 'REJECTED'].includes(decision)) {
+    setWarrantyRequestActionError(
+      requestItem.id,
+      'Selecciona si la solicitud será aceptada o rechazada.'
+    )
+    return
+  }
+
+  if (!rationale) {
+    setWarrantyRequestActionError(
+      requestItem.id,
+      'El fundamento de la decisión es obligatorio.'
+    )
+    return
+  }
+
+  if (decision === 'ACCEPTED') {
+    if (!['REPAIR', 'PART_REPLACEMENT', 'OTHER'].includes(actionType)) {
+      setWarrantyRequestActionError(
+        requestItem.id,
+        'Indica la acción realizada o autorizada.'
+      )
+      return
+    }
+
+    if (!actionDescription) {
+      setWarrantyRequestActionError(
+        requestItem.id,
+        'Describe la acción realizada o autorizada.'
+      )
+      return
+    }
+  }
+
+  const sequence = loadSequence
+  const orderId = order.value.id
+  warrantyRequestActionSavingId.value = requestItem.id
+
+  const payload = {
+    decision,
+    rationale,
+  }
+
+  if (decision === 'ACCEPTED') {
+    payload.action_type = actionType
+    payload.action_description = actionDescription
+  }
+
+  try {
+    const response = await authenticatedFetch(
+      `/api/orders/${orderId}/warranty-requests/${requestItem.id}/resolve/`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }
+    )
+
+    const data = await response.json().catch(() => null)
+
+    if (sequence !== loadSequence) return
+
+    if (!response.ok) {
+      throw new Error(
+        evidenceApiError(
+          data,
+          'No fue posible registrar la resolución administrativa.'
+        )
+      )
+    }
+
+    warrantyResolutionForms.value = {
+      ...warrantyResolutionForms.value,
+      [requestItem.id]: emptyWarrantyResolutionForm(),
+    }
+
+    await refreshWarrantyRequestAfterAction(requestItem.id)
+
+    if (sequence !== loadSequence) return
+
+    setWarrantyRequestActionSuccess(
+      requestItem.id,
+      decision === 'ACCEPTED'
+        ? 'Solicitud aceptada y resolución final registrada.'
+        : 'Solicitud rechazada y resolución final registrada.'
+    )
+  } catch (err) {
+    if (sequence === loadSequence) {
+      setWarrantyRequestActionError(
+        requestItem.id,
+        err?.message || 'Error al resolver la solicitud.'
+      )
+    }
+  } finally {
+    if (
+      sequence === loadSequence &&
+      isWarrantyRequestActionSaving(requestItem.id)
+    ) {
+      warrantyRequestActionSavingId.value = null
+    }
+  }
+}
+
+async function addWarrantyRequestAdminNote(requestItem) {
+  if (
+    !order.value ||
+    !canAdminResolveWarrantyRequest ||
+    isWarrantyRequestActionSaving(requestItem.id)
+  ) {
+    return
+  }
+
+  if (requestItem.status !== 'RESOLVED') {
+    setWarrantyRequestActionError(
+      requestItem.id,
+      'Las observaciones administrativas solo se agregan a solicitudes resueltas.'
+    )
+    return
+  }
+
+  const form =
+    warrantyAdminNoteForms.value[requestItem.id] ||
+    emptyWarrantyAdminNoteForm()
+
+  const observation = String(form.observation ?? '').trim()
+
+  clearWarrantyRequestActionMessages(requestItem.id)
+
+  if (!observation) {
+    setWarrantyRequestActionError(
+      requestItem.id,
+      'La observación administrativa es obligatoria.'
+    )
+    return
+  }
+
+  const sequence = loadSequence
+  const orderId = order.value.id
+  warrantyRequestActionSavingId.value = requestItem.id
+
+  try {
+    const response = await authenticatedFetch(
+      `/api/orders/${orderId}/warranty-requests/${requestItem.id}/admin-note/`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ observation }),
+      }
+    )
+
+    const data = await response.json().catch(() => null)
+
+    if (sequence !== loadSequence) return
+
+    if (!response.ok) {
+      throw new Error(
+        evidenceApiError(
+          data,
+          'No fue posible registrar la observación administrativa.'
+        )
+      )
+    }
+
+    warrantyAdminNoteForms.value = {
+      ...warrantyAdminNoteForms.value,
+      [requestItem.id]: emptyWarrantyAdminNoteForm(),
+    }
+
+    await refreshWarrantyRequestAfterAction(requestItem.id)
+
+    if (sequence !== loadSequence) return
+
+    setWarrantyRequestActionSuccess(
+      requestItem.id,
+      'Observación administrativa agregada al historial.'
+    )
+  } catch (err) {
+    if (sequence === loadSequence) {
+      setWarrantyRequestActionError(
+        requestItem.id,
+        err?.message || 'Error al registrar la observación.'
+      )
+    }
+  } finally {
+    if (
+      sequence === loadSequence &&
+      isWarrantyRequestActionSaving(requestItem.id)
+    ) {
+      warrantyRequestActionSavingId.value = null
     }
   }
 }
@@ -3208,6 +3783,388 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                     Registrada: {{ formatDate(requestItem.created_at) }}
                   </div>
 
+                  <!-- HU-23: propuestas, resolución y acciones según el rol. -->
+                  <div
+                    v-if="requestItem.proposals?.length"
+                    class="mt-3 border rounded bg-light p-3"
+                  >
+                    <h6 class="mb-2">Propuestas técnicas</h6>
+
+                    <div
+                      v-for="proposal in [...requestItem.proposals].reverse()"
+                      :key="proposal.id"
+                      class="small border-top pt-2 mt-2"
+                    >
+                      <div class="fw-semibold">
+                        Propuesta #{{ proposal.revision }} ·
+                        {{ warrantyActionTypeLabel(proposal.action_type) }}
+                      </div>
+                      <div class="text-muted">
+                        {{ proposal.proposed_by_username || 'Técnico no disponible' }} ·
+                        {{ formatDate(proposal.proposed_at) }}
+                      </div>
+                      <div class="mt-1" style="white-space: pre-wrap;">
+                        <strong>Fundamento técnico:</strong>
+                        {{ proposal.technical_rationale }}
+                      </div>
+                      <div class="mt-1" style="white-space: pre-wrap;">
+                        <strong>Acción propuesta:</strong>
+                        {{ proposal.action_description }}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div
+                    v-if="requestItem.resolution"
+                    class="alert mt-3 mb-0"
+                    :class="warrantyResolutionAlertClass(requestItem.resolution.decision)"
+                    role="status"
+                  >
+                    <div class="fw-semibold">
+                      Resolución final:
+                      {{
+                        requestItem.resolution.decision_display ||
+                        requestItem.resolution.decision
+                      }}
+                    </div>
+                    <div class="small mt-1">
+                      {{ requestItem.resolution.resolved_by_username || 'Administrador no disponible' }} ·
+                      {{ formatDate(requestItem.resolution.resolved_at) }}
+                    </div>
+                    <div class="small mt-2" style="white-space: pre-wrap;">
+                      <strong>Fundamento:</strong>
+                      {{ requestItem.resolution.rationale }}
+                    </div>
+                    <template v-if="requestItem.resolution.decision === 'ACCEPTED'">
+                      <div class="small mt-2">
+                        <strong>Acción:</strong>
+                        {{ warrantyActionTypeLabel(requestItem.resolution.action_type) }}
+                      </div>
+                      <div class="small mt-1" style="white-space: pre-wrap;">
+                        <strong>Detalle:</strong>
+                        {{ requestItem.resolution.action_description }}
+                      </div>
+                    </template>
+                  </div>
+
+                  <div
+                    v-if="warrantyRequestActionSuccess[requestItem.id]"
+                    class="alert alert-success small mt-3 mb-0"
+                    role="status"
+                  >
+                    {{ warrantyRequestActionSuccess[requestItem.id] }}
+                  </div>
+
+                  <div
+                    v-if="warrantyRequestActionErrors[requestItem.id]"
+                    class="alert alert-danger small mt-3 mb-0"
+                    role="alert"
+                  >
+                    {{ warrantyRequestActionErrors[requestItem.id] }}
+                  </div>
+
+                  <div
+                    v-if="
+                      canProposeWarrantyResolution &&
+                      ['PENDING', 'CHANGES_REQUESTED'].includes(requestItem.status)
+                    "
+                    class="border rounded p-3 mt-3"
+                  >
+                    <h6>
+                      {{
+                        requestItem.status === 'CHANGES_REQUESTED'
+                          ? 'Corregir y reenviar propuesta'
+                          : 'Enviar propuesta técnica'
+                      }}
+                    </h6>
+                    <p
+                      v-if="requestItem.status === 'CHANGES_REQUESTED'"
+                      class="small text-muted"
+                    >
+                      La solicitud fue devuelta para correcciones. Se conserva la
+                      propuesta anterior y este envío quedará como una nueva revisión.
+                    </p>
+
+                    <form @submit.prevent="submitWarrantyProposal(requestItem)">
+                      <label
+                        :for="`warranty-proposal-rationale-${requestItem.id}`"
+                        class="form-label"
+                      >
+                        Fundamento técnico
+                      </label>
+                      <textarea
+                        :id="`warranty-proposal-rationale-${requestItem.id}`"
+                        v-model="warrantyProposalForms[requestItem.id].technical_rationale"
+                        class="form-control mb-3"
+                        rows="3"
+                        :disabled="isWarrantyRequestActionSaving(requestItem.id)"
+                        placeholder="Explica técnicamente la propuesta de resolución."
+                        required
+                      ></textarea>
+
+                      <label
+                        :for="`warranty-proposal-action-${requestItem.id}`"
+                        class="form-label"
+                      >
+                        Acción propuesta
+                      </label>
+                      <select
+                        :id="`warranty-proposal-action-${requestItem.id}`"
+                        v-model="warrantyProposalForms[requestItem.id].action_type"
+                        class="form-select mb-3"
+                        :disabled="isWarrantyRequestActionSaving(requestItem.id)"
+                        required
+                      >
+                        <option value="" disabled>Seleccionar acción...</option>
+                        <option
+                          v-for="option in warrantyActionOptions"
+                          :key="option.value"
+                          :value="option.value"
+                        >
+                          {{ option.label }}
+                        </option>
+                      </select>
+
+                      <label
+                        :for="`warranty-proposal-description-${requestItem.id}`"
+                        class="form-label"
+                      >
+                        Descripción de la acción
+                      </label>
+                      <textarea
+                        :id="`warranty-proposal-description-${requestItem.id}`"
+                        v-model="warrantyProposalForms[requestItem.id].action_description"
+                        class="form-control mb-3"
+                        rows="3"
+                        :disabled="isWarrantyRequestActionSaving(requestItem.id)"
+                        placeholder="Describe lo que se propone realizar."
+                        required
+                      ></textarea>
+
+                      <button
+                        type="submit"
+                        class="btn btn-primary btn-sm"
+                        :disabled="isWarrantyRequestActionSaving(requestItem.id)"
+                      >
+                        <span
+                          v-if="isWarrantyRequestActionSaving(requestItem.id)"
+                          class="spinner-border spinner-border-sm me-2"
+                          aria-hidden="true"
+                        ></span>
+                        {{
+                          isWarrantyRequestActionSaving(requestItem.id)
+                            ? 'Enviando...'
+                            : requestItem.status === 'CHANGES_REQUESTED'
+                              ? 'Reenviar propuesta'
+                              : 'Enviar para aprobación'
+                        }}
+                      </button>
+                    </form>
+                  </div>
+
+                  <div
+                    v-else-if="
+                      canProposeWarrantyResolution &&
+                      requestItem.status === 'AWAITING_APPROVAL'
+                    "
+                    class="alert alert-info small mt-3 mb-0"
+                    role="status"
+                  >
+                    La propuesta técnica está pendiente de revisión por un administrador.
+                  </div>
+
+                  <div
+                    v-if="
+                      canAdminResolveWarrantyRequest &&
+                      requestItem.status !== 'RESOLVED'
+                    "
+                    class="border rounded p-3 mt-3"
+                  >
+                    <h6>Resolución administrativa</h6>
+
+                    <div
+                      v-if="
+                        requestItem.status === 'AWAITING_APPROVAL' &&
+                        requestItem.latest_proposal
+                      "
+                      class="alert alert-light border small"
+                    >
+                      <strong>
+                        Propuesta técnica #{{ requestItem.latest_proposal.revision }}
+                      </strong>
+                      <div class="mt-1">
+                        {{ warrantyActionTypeLabel(requestItem.latest_proposal.action_type) }}
+                      </div>
+                      <div class="mt-1" style="white-space: pre-wrap;">
+                        {{ requestItem.latest_proposal.action_description }}
+                      </div>
+                    </div>
+
+                    <form @submit.prevent="resolveWarrantyRequest(requestItem)">
+                      <label
+                        :for="`warranty-resolution-decision-${requestItem.id}`"
+                        class="form-label"
+                      >
+                        Decisión
+                      </label>
+                      <select
+                        :id="`warranty-resolution-decision-${requestItem.id}`"
+                        v-model="warrantyResolutionForms[requestItem.id].decision"
+                        class="form-select mb-3"
+                        :disabled="isWarrantyRequestActionSaving(requestItem.id)"
+                        required
+                      >
+                        <option value="" disabled>Seleccionar decisión...</option>
+                        <option value="ACCEPTED">Aceptar solicitud</option>
+                        <option value="REJECTED">Rechazar solicitud</option>
+                      </select>
+
+                      <label
+                        :for="`warranty-resolution-rationale-${requestItem.id}`"
+                        class="form-label"
+                      >
+                        Fundamento de la decisión
+                      </label>
+                      <textarea
+                        :id="`warranty-resolution-rationale-${requestItem.id}`"
+                        v-model="warrantyResolutionForms[requestItem.id].rationale"
+                        class="form-control mb-3"
+                        rows="3"
+                        :disabled="isWarrantyRequestActionSaving(requestItem.id)"
+                        placeholder="Justifica la decisión administrativa."
+                        required
+                      ></textarea>
+
+                      <template
+                        v-if="
+                          warrantyResolutionForms[requestItem.id].decision === 'ACCEPTED'
+                        "
+                      >
+                        <label
+                          :for="`warranty-resolution-action-${requestItem.id}`"
+                          class="form-label"
+                        >
+                          Acción realizada o autorizada
+                        </label>
+                        <select
+                          :id="`warranty-resolution-action-${requestItem.id}`"
+                          v-model="warrantyResolutionForms[requestItem.id].action_type"
+                          class="form-select mb-3"
+                          :disabled="isWarrantyRequestActionSaving(requestItem.id)"
+                          required
+                        >
+                          <option value="" disabled>Seleccionar acción...</option>
+                          <option
+                            v-for="option in warrantyActionOptions"
+                            :key="option.value"
+                            :value="option.value"
+                          >
+                            {{ option.label }}
+                          </option>
+                        </select>
+
+                        <label
+                          :for="`warranty-resolution-description-${requestItem.id}`"
+                          class="form-label"
+                        >
+                          Descripción de la acción
+                        </label>
+                        <textarea
+                          :id="`warranty-resolution-description-${requestItem.id}`"
+                          v-model="warrantyResolutionForms[requestItem.id].action_description"
+                          class="form-control mb-3"
+                          rows="3"
+                          :disabled="isWarrantyRequestActionSaving(requestItem.id)"
+                          placeholder="Describe la acción realizada o autorizada."
+                          required
+                        ></textarea>
+                      </template>
+
+                      <button
+                        type="submit"
+                        class="btn btn-primary btn-sm"
+                        :disabled="isWarrantyRequestActionSaving(requestItem.id)"
+                      >
+                        <span
+                          v-if="isWarrantyRequestActionSaving(requestItem.id)"
+                          class="spinner-border spinner-border-sm me-2"
+                          aria-hidden="true"
+                        ></span>
+                        {{
+                          isWarrantyRequestActionSaving(requestItem.id)
+                            ? 'Guardando...'
+                            : 'Registrar resolución final'
+                        }}
+                      </button>
+                    </form>
+
+                    <form
+                      v-if="requestItem.status === 'AWAITING_APPROVAL'"
+                      class="border-top mt-3 pt-3"
+                      @submit.prevent="returnWarrantyRequestToTech(requestItem)"
+                    >
+                      <label
+                        :for="`warranty-return-reason-${requestItem.id}`"
+                        class="form-label"
+                      >
+                        Devolver al técnico
+                      </label>
+                      <textarea
+                        :id="`warranty-return-reason-${requestItem.id}`"
+                        v-model="warrantyReturnForms[requestItem.id].reason"
+                        class="form-control mb-2"
+                        rows="2"
+                        :disabled="isWarrantyRequestActionSaving(requestItem.id)"
+                        placeholder="Indica qué debe corregir o complementar."
+                        required
+                      ></textarea>
+                      <button
+                        type="submit"
+                        class="btn btn-outline-warning btn-sm"
+                        :disabled="isWarrantyRequestActionSaving(requestItem.id)"
+                      >
+                        Solicitar correcciones
+                      </button>
+                    </form>
+                  </div>
+
+                  <div
+                    v-if="
+                      canAdminResolveWarrantyRequest &&
+                      requestItem.status === 'RESOLVED'
+                    "
+                    class="border rounded p-3 mt-3"
+                  >
+                    <h6>Observación administrativa</h6>
+                    <p class="small text-muted">
+                      Agrega una aclaración posterior sin modificar ni reabrir la
+                      resolución final.
+                    </p>
+                    <form @submit.prevent="addWarrantyRequestAdminNote(requestItem)">
+                      <textarea
+                        :id="`warranty-admin-note-${requestItem.id}`"
+                        v-model="warrantyAdminNoteForms[requestItem.id].observation"
+                        class="form-control mb-2"
+                        rows="2"
+                        :disabled="isWarrantyRequestActionSaving(requestItem.id)"
+                        placeholder="Escribe la observación que quedará en el historial."
+                        required
+                      ></textarea>
+                      <button
+                        type="submit"
+                        class="btn btn-outline-primary btn-sm"
+                        :disabled="isWarrantyRequestActionSaving(requestItem.id)"
+                      >
+                        <span
+                          v-if="isWarrantyRequestActionSaving(requestItem.id)"
+                          class="spinner-border spinner-border-sm me-2"
+                          aria-hidden="true"
+                        ></span>
+                        Agregar observación
+                      </button>
+                    </form>
+                  </div>
+
                   <div class="mt-3">
                     <button
                       type="button"
@@ -3271,6 +4228,9 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                         <div class="text-muted">
                           {{ formatDate(event.changed_at) }} ·
                           {{ event.changed_by_username || 'Usuario no disponible' }}
+                          <span v-if="event.changed_by_role">
+                            · {{ event.changed_by_role }}
+                          </span>
                         </div>
                         <div v-if="event.from_status" class="mt-1">
                           <strong>Cambio de estado:</strong>
@@ -3281,6 +4241,13 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                         <div v-else class="mt-1">
                           <strong>Estado:</strong>
                           {{ event.to_status_display || event.to_status }}
+                        </div>
+                        <div
+                          v-if="event.decision"
+                          class="mt-1"
+                        >
+                          <strong>Decisión:</strong>
+                          {{ event.decision_display || event.decision }}
                         </div>
                         <div
                           v-if="event.observation"
@@ -3380,11 +4347,11 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                 </div>
 
                 <div
-                  v-if="pendingWarrantyRequestExists"
+                  v-if="openWarrantyRequestExists"
                   class="alert alert-warning small"
                   role="alert"
                 >
-                  Esta garantía ya tiene una solicitud pendiente. Puedes continuar
+                  Esta garantía ya tiene una solicitud abierta. Puedes continuar
                   trabajando con la solicitud existente en el listado o registrar
                   otra. Si creas otra, debes justificar el motivo.
                 </div>
@@ -3414,7 +4381,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                   required
                 ></textarea>
 
-                <template v-if="pendingWarrantyRequestExists">
+                <template v-if="openWarrantyRequestExists">
                   <label for="warranty-request-concurrent-reason" class="form-label">
                     Motivo para abrir otra solicitud
                   </label>
