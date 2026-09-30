@@ -116,6 +116,12 @@ class OrderPartSerializer(serializers.ModelSerializer):
             "note",
             "created_by_username",
             "created_at",
+            "is_cancelled",
+            "cancellation_reason",
+            "cancelled_by",
+            "cancelled_by_username",
+            "cancelled_by_role",
+            "cancelled_at",
         )
 
         read_only_fields = (
@@ -128,6 +134,12 @@ class OrderPartSerializer(serializers.ModelSerializer):
             "subtotal",
             "created_by_username",
             "created_at",
+            "is_cancelled",
+            "cancellation_reason",
+            "cancelled_by",
+            "cancelled_by_username",
+            "cancelled_by_role",
+            "cancelled_at",
         )
 
     def get_subtotal(self, obj):
@@ -247,3 +259,27 @@ class OrderPartCorrectionHistorySerializer(
         )
 
         read_only_fields = fields
+
+
+class OrderPartCancellationSerializer(serializers.Serializer):
+    """
+    Entrada para HU-25.
+
+    La anulación exige siempre un motivo para mantener
+    trazabilidad del cambio.
+    """
+
+    reason = serializers.CharField(
+        allow_blank=False,
+        trim_whitespace=True,
+    )
+
+    def validate_reason(self, value):
+        reason = value.strip()
+
+        if not reason:
+            raise serializers.ValidationError(
+                "Debes indicar el motivo de la anulación."
+            )
+
+        return reason

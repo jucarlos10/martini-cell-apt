@@ -495,11 +495,17 @@ class WarrantyRequestTests(APITestCase):
             self.assertEqual(response.status_code, status.HTTP_200_OK)
             self.assertEqual(response["Content-Type"], "image/jpeg")
             self.assertEqual(response["Cache-Control"], "private, no-store")
-            # El estado y el tipo prueban el acceso; consumir/cerrar el stream
-            # en TestCase cierra su conexión PostgreSQL antes del rollback.
+            # FileResponse mantiene abierto el archivo hasta cerrar sus recursos.
+            # Ejecutamos solo esos cierres para no disparar request_finished,
+            # que en TestCase puede cerrar la conexión PostgreSQL.
+            for closer in response._resource_closers:
+                closer()
 
             self.client.force_authenticate(user=self.technician)
-            self.assertEqual(self.client.get(url).status_code, 200)
+            technician_response = self.client.get(url)
+            self.assertEqual(technician_response.status_code, 200)
+            for closer in technician_response._resource_closers:
+                closer()
             self.assertEqual(
                 self.client.get(self.evidence_url(request_id, self.other_order)).status_code,
                 status.HTTP_404_NOT_FOUND,

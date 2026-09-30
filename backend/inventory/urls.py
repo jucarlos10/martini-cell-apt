@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .order_views import (
+    OrderPartCancellationView,
     OrderPartCorrectionHistoryView,
     OrderPartCorrectionView,
     OrderPartsView,
@@ -58,5 +59,15 @@ urlpatterns = [
         ),
         OrderPartCorrectionHistoryView.as_view(),
         name="order-part-correction-history",
+    ),
+
+    # HU-25: Anulación lógica de un repuesto registrado.
+    path(
+        (
+            "orders/<int:order_id>/parts/"
+            "<int:order_part_id>/cancellation/"
+        ),
+        OrderPartCancellationView.as_view(),
+        name="order-part-cancellation",
     ),
 ]

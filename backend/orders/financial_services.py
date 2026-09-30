@@ -1,4 +1,3 @@
-
 from decimal import Decimal
 
 from inventory.models import OrderPart
@@ -16,6 +15,10 @@ def calculate_order_financials(order):
 
     El costo de repuestos proviene exclusivamente de OrderPart,
     utilizando las cantidades y costos históricos de HU-13.
+
+    HU-25 excluye de los costos vigentes los usos de repuestos
+    que hayan sido anulados, manteniendo sus antecedentes para
+    trazabilidad.
     """
 
     financial = OrderFinancial.objects.filter(
@@ -28,10 +31,12 @@ def calculate_order_financials(order):
     other_cost = financial.other_direct_cost if financial else ZERO
     notes = financial.notes if financial else ""
 
-    # Se suma cada utilización registrada, sin usar el costo
-    # actual del catálogo ni duplicar el costo de repuestos.
+    # Se suman solo las utilizaciones vigentes. Los usos anulados
+    # se conservan históricamente, pero ya no forman parte del
+    # costo actual de repuestos de la orden.
     usages = OrderPart.objects.filter(
-        order=order
+        order=order,
+        is_cancelled=False,
     ).values_list("quantity", "unit_cost")
 
     parts_cost = sum(

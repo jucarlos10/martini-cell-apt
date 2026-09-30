@@ -1,5 +1,6 @@
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -14,6 +15,7 @@ from .models import (
     Part,
 )
 from .serializers import (
+    OrderPartCancellationSerializer,
     OrderPartCorrectionHistorySerializer,
     OrderPartCorrectionSerializer,
     OrderPartSerializer,
@@ -40,6 +42,7 @@ class OrderPartsView(APIView):
                 "part",
                 "supplier",
                 "created_by",
+                "cancelled_by",
             )
             .order_by("created_at", "id")
         )
@@ -149,7 +152,10 @@ class OrderPartsView(APIView):
         )
 
         return Response(
-            OrderPartSerializer(used_part).data,
+            OrderPartSerializer(
+                used_part,
+                context={"request": request},
+            ).data,
             status=status.HTTP_201_CREATED,
         )
 
@@ -215,6 +221,18 @@ class OrderPartCorrectionView(APIView):
             pk=order_part_id,
             order=order,
         )
+
+        # Un uso anulado queda congelado como antecedente histórico.
+        if used_part.is_cancelled:
+            return Response(
+                {
+                    "detail": (
+                        "No se puede corregir un uso de repuesto "
+                        "que ya fue anulado."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         serializer = OrderPartCorrectionSerializer(
             data=request.data,
@@ -426,4 +444,134 @@ class OrderPartCorrectionHistoryView(APIView):
                 history,
                 many=True,
             ).data
+        )
+
+
+class OrderPartCancellationView(APIView):
+    """
+    HU-25: anula lógicamente un uso de repuesto.
+
+    El registro original se conserva para trazabilidad. La cantidad
+    vuelve al stock una sola vez y el uso anulado deja de considerarse
+    como consumo vigente.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, order_id, order_part_id):
+        if request.user.role not in {"ADMIN", "TECH"}:
+            return Response(
+                {
+                    "detail": (
+                        "No tienes permiso para anular "
+                        "repuestos de una orden."
+                    )
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        order = get_object_or_404(
+            ServiceOrder.objects.select_for_update(),
+            pk=order_id,
+        )
+
+        if order.status in {
+            ServiceOrder.Status.DELIVERED,
+            ServiceOrder.Status.CLOSED,
+        }:
+            return Response(
+                {
+                    "detail": (
+                        "No se pueden anular repuestos de una "
+                        "orden entregada o cerrada."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # No incluimos relaciones nullable en select_related mientras
+        # usamos FOR UPDATE, para evitar outer joins bloqueables.
+        used_part = get_object_or_404(
+            OrderPart.objects
+            .select_for_update()
+            .select_related(
+                "part",
+                "supplier",
+            ),
+            pk=order_part_id,
+            order=order,
+        )
+
+        serializer = OrderPartCancellationSerializer(
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+        reason = serializer.validated_data["reason"]
+
+        if used_part.is_cancelled:
+            return Response(
+                {
+                    "detail": (
+                        "Este uso de repuesto ya fue anulado. "
+                        "El stock no se devolverá nuevamente."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if OrderWarranty.objects.filter(
+            order_part=used_part,
+        ).exists():
+            return Response(
+                {
+                    "detail": (
+                        "No se puede anular este uso porque tiene "
+                        "una garantía de repuesto asociada."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        part = get_object_or_404(
+            Part.objects.select_for_update(),
+            pk=used_part.part_id,
+        )
+
+        # La devolución ocurre dentro de la misma transacción que la
+        # auditoría de anulación, por lo que se aplica una sola vez.
+        part.stock += used_part.quantity
+        part.save(
+            update_fields=[
+                "stock",
+                "updated_at",
+            ]
+        )
+
+        used_part.is_cancelled = True
+        used_part.cancellation_reason = reason
+        used_part.cancelled_by = request.user
+        used_part.cancelled_by_username = request.user.get_username()
+        used_part.cancelled_by_role = request.user.role
+        used_part.cancelled_at = timezone.now()
+        used_part.save(
+            update_fields=[
+                "is_cancelled",
+                "cancellation_reason",
+                "cancelled_by",
+                "cancelled_by_username",
+                "cancelled_by_role",
+                "cancelled_at",
+            ]
+        )
+
+        return Response(
+            {
+                "detail": "Uso de repuesto anulado correctamente.",
+                "used_part": OrderPartSerializer(
+                    used_part,
+                    context={"request": request},
+                ).data,
+            },
+            status=status.HTTP_200_OK,
         )
