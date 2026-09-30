@@ -8,6 +8,13 @@ from .models import (
 )
 
 
+def hide_costs_for_request(context):
+    request = context.get("request")
+    return request is not None and getattr(request.user, "role", None) not in {
+        "ADMIN", "TECH"
+    }
+
+
 class SupplierSerializer(serializers.ModelSerializer):
     class Meta:
         model = Supplier
@@ -62,6 +69,12 @@ class PartSerializer(serializers.ModelSerializer):
             )
 
         return supplier
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if hide_costs_for_request(self.context):
+            data.pop("unit_cost", None)
+        return data
 
 
 class OrderPartSerializer(serializers.ModelSerializer):
@@ -119,6 +132,13 @@ class OrderPartSerializer(serializers.ModelSerializer):
 
     def get_subtotal(self, obj):
         return f"{obj.subtotal:.2f}"
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if hide_costs_for_request(self.context):
+            data.pop("unit_cost", None)
+            data.pop("subtotal", None)
+        return data
 
 
 class OrderPartCorrectionSerializer(serializers.Serializer):

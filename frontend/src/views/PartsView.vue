@@ -511,7 +511,7 @@ onMounted(loadInventory)
                 <tr>
                   <th>Repuesto</th>
                   <th>Proveedor</th>
-                  <th>Costo ref.</th>
+                  <th v-if="canManage">Costo ref.</th>
                   <th>Stock</th>
                   <th>Estado</th>
                   <th v-if="canManage">Acción</th>
@@ -521,7 +521,7 @@ onMounted(loadInventory)
               <tbody>
                 <tr v-if="parts.length === 0">
                   <td
-                    :colspan="canManage ? 6 : 5"
+                    :colspan="canManage ? 6 : 4"
                     class="text-center text-muted py-4"
                   >
                     No hay repuestos registrados.
@@ -537,7 +537,7 @@ onMounted(loadInventory)
                   </td>
 
                   <td>{{ item.supplier_name }}</td>
-                  <td>{{ formatMoney(item.unit_cost) }}</td>
+                  <td v-if="canManage">{{ formatMoney(item.unit_cost) }}</td>
                   <td>{{ item.stock }}</td>
 
                   <td>

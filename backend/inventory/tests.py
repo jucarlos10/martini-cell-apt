@@ -154,6 +154,32 @@ class InventoryTests(APITestCase):
         self.assertEqual(self.part.stock, 5)
         self.assertEqual(OrderPart.objects.count(), 0)
 
+    def test_helper_reads_stock_and_usage_without_financial_costs(self):
+        self.assertEqual(self.register_part().status_code, status.HTTP_201_CREATED)
+
+        admin_catalog = self.client.get(reverse("part-list-create"))
+        admin_usage = self.client.get(self.order_parts_url)
+        self.assertEqual(admin_catalog.data[0]["unit_cost"], "15000.00")
+        self.assertEqual(admin_usage.data[0]["unit_cost"], "15000.00")
+        self.assertEqual(admin_usage.data[0]["subtotal"], "30000.00")
+
+        self.client.force_authenticate(user=self.helper)
+        catalog = self.client.get(reverse("part-list-create"))
+        detail = self.client.get(
+            reverse("part-detail", kwargs={"pk": self.part.pk})
+        )
+        usage = self.client.get(self.order_parts_url)
+
+        self.assertEqual(catalog.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
+        self.assertEqual(usage.status_code, status.HTTP_200_OK)
+        self.assertEqual(catalog.data[0]["stock"], 3)
+        self.assertEqual(usage.data[0]["quantity"], 2)
+        self.assertNotIn("unit_cost", catalog.data[0])
+        self.assertNotIn("unit_cost", detail.data)
+        self.assertNotIn("unit_cost", usage.data[0])
+        self.assertNotIn("subtotal", usage.data[0])
+
     def test_anonymous_user_cannot_access_order_parts(self):
         self.client.force_authenticate(user=None)
 
