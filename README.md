@@ -62,7 +62,9 @@ Marcos. El avance de cada historia se registra en el
 
 ## Documentación
 
-Los documentos técnicos están en [`docs/`](docs/) y las evidencias académicas
+La [guía de cambios y estado del Kanban](docs/registro-de-cambios-y-tablero-2026-09-30.md)
+explica qué se integró, por qué se ajustó y qué sigue en pruebas. Los demás
+documentos técnicos están en [`docs/`](docs/) y las evidencias académicas
 de la primera fase en [`fase 1/`](fase%201/).
 
 ## Estructura del repositorio
