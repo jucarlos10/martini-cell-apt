@@ -849,6 +849,69 @@ class OrderViabilityAssessment(models.Model):
             f"{self.order.tracking_code}"
         )
 
+# HU-27: Auditoría de cambios sensibles de una orden.
+class OrderSensitiveChangeHistory(models.Model):
+    class Field(models.TextChoices):
+        CLIENT = "CLIENT", "Cliente asociado"
+        EQUIPMENT = "EQUIPMENT", "Equipo asociado"
+        REPORTED_ISSUE = "REPORTED_ISSUE", "Problema reportado"
+        INITIAL_OBSERVATIONS = (
+            "INITIAL_OBSERVATIONS",
+            "Observaciones iniciales",
+        )
+
+    order = models.ForeignKey(
+        ServiceOrder,
+        on_delete=models.PROTECT,
+        related_name="sensitive_change_history",
+    )
+
+    field = models.CharField(
+        max_length=30,
+        choices=Field.choices,
+    )
+
+    old_value = models.JSONField()
+
+    new_value = models.JSONField()
+
+    reason = models.TextField(
+        blank=True,
+    )
+
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_sensitive_changes",
+    )
+
+    changed_by_username = models.CharField(
+        max_length=150,
+        blank=True,
+    )
+
+    changed_by_role = models.CharField(
+        max_length=20,
+        blank=True,
+    )
+
+    changed_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering = ["changed_at", "id"]
+
+    def __str__(self):
+        return (
+            f"{self.order.tracking_code} - "
+            f"{self.get_field_display()} - "
+            f"{self.changed_at}"
+        )
+
+
 # HU-22: Solicitudes de garantía e historial de reclamos.
 # Se importan al final para que Django registre estos modelos sin
 # generar una dependencia circular antes de definir OrderWarranty.

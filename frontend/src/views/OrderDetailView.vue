@@ -27,10 +27,314 @@ const canAdminResolveWarrantyRequest = currentUser?.role === 'ADMIN'
 const canViewViability = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canManageViability = ['ADMIN', 'TECH'].includes(currentUser?.role)
 
+// HU-27: edición y consulta de cambios sensibles solo para ADMIN/TECH.
+const canEditSensitiveOrder = ['ADMIN', 'TECH'].includes(currentUser?.role)
+const canViewSensitiveHistory = ['ADMIN', 'TECH'].includes(currentUser?.role)
+
 const order = ref(null)
 const history = ref([])
 const technicalReport = ref(null)
 const times = ref(null)
+
+// HU-27: edición controlada e historial de cambios sensibles.
+const sensitiveChanges = ref([])
+const sensitiveHistoryLoading = ref(false)
+const sensitiveHistoryError = ref('')
+const sensitiveEditOpen = ref(false)
+const sensitiveReferenceLoading = ref(false)
+const sensitiveReferenceError = ref('')
+const sensitiveSaving = ref(false)
+const sensitiveFormError = ref('')
+const sensitiveSuccess = ref('')
+const sensitiveClients = ref([])
+const sensitiveDevices = ref([])
+
+const emptySensitiveOrderForm = () => ({
+  client: '',
+  equipment: '',
+  reported_issue: '',
+  initial_observations: '',
+  change_reason: '',
+})
+const sensitiveOrderForm = ref(emptySensitiveOrderForm())
+
+const sensitiveOrderLocked = computed(() =>
+  ['DELIVERED', 'CLOSED'].includes(order.value?.status)
+)
+
+const availableSensitiveDevices = computed(() => {
+  const clientId = String(sensitiveOrderForm.value.client || '')
+  if (!clientId) return []
+
+  return sensitiveDevices.value.filter((device) =>
+    String(device.client) === clientId &&
+    (device.is_active || Number(device.id) === Number(order.value?.equipment))
+  )
+})
+
+const sensitiveRelationChanged = computed(() =>
+  Number(sensitiveOrderForm.value.client) !== Number(order.value?.client) ||
+  Number(sensitiveOrderForm.value.equipment) !== Number(order.value?.equipment)
+)
+
+function syncSensitiveOrderForm() {
+  if (!order.value) {
+    sensitiveOrderForm.value = emptySensitiveOrderForm()
+    return
+  }
+
+  sensitiveOrderForm.value = {
+    client: order.value.client ?? '',
+    equipment: order.value.equipment ?? '',
+    reported_issue: order.value.reported_issue ?? '',
+    initial_observations: order.value.initial_observations ?? '',
+    change_reason: '',
+  }
+}
+
+function resetSensitiveOrderState() {
+  sensitiveChanges.value = []
+  sensitiveHistoryLoading.value = false
+  sensitiveHistoryError.value = ''
+  sensitiveEditOpen.value = false
+  sensitiveReferenceLoading.value = false
+  sensitiveReferenceError.value = ''
+  sensitiveSaving.value = false
+  sensitiveFormError.value = ''
+  sensitiveSuccess.value = ''
+  sensitiveClients.value = []
+  sensitiveDevices.value = []
+  sensitiveOrderForm.value = emptySensitiveOrderForm()
+}
+
+function onSensitiveClientChange() {
+  const selectedDevice = sensitiveDevices.value.find(
+    (device) => Number(device.id) === Number(sensitiveOrderForm.value.equipment)
+  )
+
+  if (
+    selectedDevice &&
+    String(selectedDevice.client) !== String(sensitiveOrderForm.value.client)
+  ) {
+    sensitiveOrderForm.value.equipment = ''
+  }
+
+  sensitiveFormError.value = ''
+  sensitiveSuccess.value = ''
+}
+
+function formatSensitiveValue(value) {
+  if (value === null || value === undefined || value === '') return 'Sin información'
+
+  if (typeof value === 'object') {
+    if (value.name) return `${value.name}${value.id ? ` (#${value.id})` : ''}`
+    if (value.description) {
+      return `${value.description}${value.id ? ` (#${value.id})` : ''}`
+    }
+    return JSON.stringify(value)
+  }
+
+  return String(value)
+}
+
+function sensitiveRoleLabel(role) {
+  if (role === 'ADMIN') return 'Administrador'
+  if (role === 'TECH') return 'Técnico'
+  if (role === 'HELPER') return 'Ayudante'
+  return role || 'No disponible'
+}
+
+async function loadSensitiveReferenceData() {
+  if (!canEditSensitiveOrder || sensitiveReferenceLoading.value) return
+
+  sensitiveReferenceLoading.value = true
+  sensitiveReferenceError.value = ''
+
+  try {
+    const [clientsResponse, devicesResponse] = await Promise.all([
+      authenticatedFetch('/api/clients/'),
+      authenticatedFetch('/api/devices/'),
+    ])
+
+    const clientsData = await clientsResponse.json().catch(() => null)
+    const devicesData = await devicesResponse.json().catch(() => null)
+
+    if (!clientsResponse.ok) {
+      throw new Error(
+        evidenceApiError(clientsData, 'No fue posible cargar los clientes.')
+      )
+    }
+
+    if (!devicesResponse.ok) {
+      throw new Error(
+        evidenceApiError(devicesData, 'No fue posible cargar los equipos.')
+      )
+    }
+
+    sensitiveClients.value = Array.isArray(clientsData)
+      ? clientsData
+      : (clientsData?.results || [])
+
+    sensitiveDevices.value = Array.isArray(devicesData)
+      ? devicesData
+      : (devicesData?.results || [])
+  } catch (err) {
+    sensitiveReferenceError.value =
+      err?.message || 'Error al cargar clientes y equipos.'
+  } finally {
+    sensitiveReferenceLoading.value = false
+  }
+}
+
+async function loadSensitiveHistory(orderId = order.value?.id, sequence = loadSequence) {
+  if (!canViewSensitiveHistory || !orderId) return
+
+  sensitiveHistoryLoading.value = true
+  sensitiveHistoryError.value = ''
+
+  try {
+    const response = await getResponse(
+      `/api/orders/${orderId}/sensitive-changes/`
+    )
+
+    if (sequence !== loadSequence) return
+
+    if (!response.ok) {
+      throw new Error(
+        evidenceApiError(
+          response.data,
+          'No fue posible cargar el historial de cambios sensibles.'
+        )
+      )
+    }
+
+    sensitiveChanges.value = Array.isArray(response.data)
+      ? response.data
+      : (response.data?.results || [])
+  } catch (err) {
+    if (sequence === loadSequence) {
+      sensitiveChanges.value = []
+      sensitiveHistoryError.value =
+        err?.message || 'Error al consultar el historial de cambios sensibles.'
+    }
+  } finally {
+    if (sequence === loadSequence) sensitiveHistoryLoading.value = false
+  }
+}
+
+async function openSensitiveOrderEdit() {
+  if (!canEditSensitiveOrder || sensitiveOrderLocked.value || !order.value) return
+
+  sensitiveFormError.value = ''
+  sensitiveSuccess.value = ''
+  syncSensitiveOrderForm()
+
+  if (!sensitiveClients.value.length || !sensitiveDevices.value.length) {
+    await loadSensitiveReferenceData()
+  }
+
+  if (!sensitiveReferenceError.value) sensitiveEditOpen.value = true
+}
+
+function cancelSensitiveOrderEdit() {
+  if (sensitiveSaving.value) return
+  sensitiveEditOpen.value = false
+  sensitiveFormError.value = ''
+  syncSensitiveOrderForm()
+}
+
+async function saveSensitiveOrder() {
+  if (
+    !canEditSensitiveOrder ||
+    sensitiveOrderLocked.value ||
+    sensitiveSaving.value ||
+    !order.value
+  ) return
+
+  sensitiveFormError.value = ''
+  sensitiveSuccess.value = ''
+
+  const clientId = Number(sensitiveOrderForm.value.client)
+  const equipmentId = Number(sensitiveOrderForm.value.equipment)
+  const reportedIssue = String(
+    sensitiveOrderForm.value.reported_issue ?? ''
+  ).trim()
+  const initialObservations = String(
+    sensitiveOrderForm.value.initial_observations ?? ''
+  ).trim()
+  const changeReason = String(
+    sensitiveOrderForm.value.change_reason ?? ''
+  ).trim()
+
+  if (!clientId || !equipmentId) {
+    sensitiveFormError.value = 'Selecciona un cliente y un equipo válido.'
+    return
+  }
+
+  const selectedDevice = sensitiveDevices.value.find(
+    (device) => Number(device.id) === equipmentId
+  )
+
+  if (!selectedDevice || Number(selectedDevice.client) !== clientId) {
+    sensitiveFormError.value =
+      'El equipo seleccionado debe pertenecer al cliente indicado.'
+    return
+  }
+
+  if (!reportedIssue) {
+    sensitiveFormError.value = 'La falla reportada no puede quedar vacía.'
+    return
+  }
+
+  if (sensitiveRelationChanged.value && !changeReason) {
+    sensitiveFormError.value =
+      'Debes indicar el motivo al cambiar el cliente o el equipo.'
+    return
+  }
+
+  const orderId = order.value.id
+  const sequence = loadSequence
+  sensitiveSaving.value = true
+
+  try {
+    const response = await authenticatedFetch(`/api/orders/${orderId}/`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client: clientId,
+        equipment: equipmentId,
+        reported_issue: reportedIssue,
+        initial_observations: initialObservations,
+        change_reason: changeReason,
+      }),
+    })
+
+    const data = await response.json().catch(() => null)
+
+    if (sequence !== loadSequence) return
+
+    if (!response.ok) {
+      throw new Error(
+        evidenceApiError(data, 'No fue posible actualizar los datos de la orden.')
+      )
+    }
+
+    order.value = data
+    sensitiveEditOpen.value = false
+    syncSensitiveOrderForm()
+    sensitiveSuccess.value =
+      'Datos de la orden actualizados. Los cambios sensibles quedaron registrados.'
+
+    await loadSensitiveHistory(orderId, sequence)
+  } catch (err) {
+    if (sequence === loadSequence) {
+      sensitiveFormError.value =
+        err?.message || 'Error al actualizar los datos de la orden.'
+    }
+  } finally {
+    if (sequence === loadSequence) sensitiveSaving.value = false
+  }
+}
 
 // HU-10: cambios de estado autorizados por la API y trazabilidad real.
 const statusInfo = ref(null)
@@ -3002,6 +3306,7 @@ async function loadOrder() {
   resetFinancial()
   resetWarranties()
   resetViability()
+  resetSensitiveOrderState()
 
   order.value = null
   history.value = []
@@ -3078,6 +3383,9 @@ async function loadOrder() {
       loadTechnicians(sequence),
       ...(technicalReport.value && canViewTechnicalReportHistory
         ? [loadTechnicalReportHistory(orderId, sequence)]
+        : []),
+      ...(canViewSensitiveHistory
+        ? [loadSensitiveHistory(orderId, sequence)]
         : []),
     ])
     if (sequence !== loadSequence) return
@@ -3164,7 +3472,163 @@ watch(() => route.params.id, loadOrder, { immediate: true })
       <section v-if="tab === 'resumen'" class="row g-3">
         <div class="col-lg-8">
           <div class="mc-card p-4 h-100">
-            <h5>Información general</h5>
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+              <h5 class="mb-0">Información general</h5>
+              <button
+                v-if="canEditSensitiveOrder && !sensitiveOrderLocked && !sensitiveEditOpen"
+                type="button"
+                class="btn btn-sm btn-outline-primary"
+                @click="openSensitiveOrderEdit"
+              >
+                <i class="bi bi-pencil-square me-1"></i>
+                Editar datos
+              </button>
+            </div>
+
+            <div
+              v-if="canEditSensitiveOrder && sensitiveOrderLocked"
+              class="alert alert-light border small mt-3 mb-0"
+            >
+              Los datos generales no se pueden modificar porque la orden está
+              {{ order.status === 'CLOSED' ? 'cerrada' : 'entregada' }}.
+            </div>
+
+            <div v-if="sensitiveSuccess" class="alert alert-success mt-3" role="status">
+              {{ sensitiveSuccess }}
+            </div>
+
+            <div v-if="sensitiveReferenceError" class="alert alert-warning mt-3" role="alert">
+              {{ sensitiveReferenceError }}
+            </div>
+
+            <form
+              v-if="sensitiveEditOpen"
+              class="border rounded p-3 mt-3"
+              @submit.prevent="saveSensitiveOrder"
+            >
+              <h6>Modificar datos sensibles</h6>
+              <div class="small text-muted mb-3">
+                Los cambios quedan registrados con valor anterior, valor nuevo,
+                fecha y usuario responsable.
+              </div>
+
+              <div v-if="sensitiveFormError" class="alert alert-danger" role="alert">
+                {{ sensitiveFormError }}
+              </div>
+
+              <div class="row g-3">
+                <div class="col-md-6">
+                  <label for="sensitive-client" class="form-label">Cliente asociado</label>
+                  <select
+                    id="sensitive-client"
+                    v-model="sensitiveOrderForm.client"
+                    class="form-select"
+                    :disabled="sensitiveSaving || sensitiveReferenceLoading"
+                    required
+                    @change="onSensitiveClientChange"
+                  >
+                    <option value="">Seleccionar cliente...</option>
+                    <option
+                      v-for="client in sensitiveClients"
+                      :key="client.id"
+                      :value="client.id"
+                    >
+                      {{ client.name }} · {{ client.rut }}
+                    </option>
+                  </select>
+                </div>
+
+                <div class="col-md-6">
+                  <label for="sensitive-equipment" class="form-label">Equipo asociado</label>
+                  <select
+                    id="sensitive-equipment"
+                    v-model="sensitiveOrderForm.equipment"
+                    class="form-select"
+                    :disabled="sensitiveSaving || sensitiveReferenceLoading || !sensitiveOrderForm.client"
+                    required
+                  >
+                    <option value="">Seleccionar equipo...</option>
+                    <option
+                      v-for="device in availableSensitiveDevices"
+                      :key="device.id"
+                      :value="device.id"
+                    >
+                      Equipo #{{ device.id }} · {{ device.brand }} {{ device.model }}
+                    </option>
+                  </select>
+                </div>
+
+                <div class="col-12">
+                  <label for="sensitive-reported-issue" class="form-label">
+                    Falla reportada
+                  </label>
+                  <textarea
+                    id="sensitive-reported-issue"
+                    v-model="sensitiveOrderForm.reported_issue"
+                    class="form-control"
+                    rows="3"
+                    :disabled="sensitiveSaving"
+                    required
+                  ></textarea>
+                </div>
+
+                <div class="col-12">
+                  <label for="sensitive-initial-observations" class="form-label">
+                    Observaciones iniciales
+                  </label>
+                  <textarea
+                    id="sensitive-initial-observations"
+                    v-model="sensitiveOrderForm.initial_observations"
+                    class="form-control"
+                    rows="3"
+                    :disabled="sensitiveSaving"
+                  ></textarea>
+                </div>
+
+                <div class="col-12">
+                  <label for="sensitive-change-reason" class="form-label">
+                    Motivo del cambio
+                    <span v-if="sensitiveRelationChanged" class="text-danger">*</span>
+                  </label>
+                  <textarea
+                    id="sensitive-change-reason"
+                    v-model="sensitiveOrderForm.change_reason"
+                    class="form-control"
+                    rows="2"
+                    :disabled="sensitiveSaving"
+                    :required="sensitiveRelationChanged"
+                    placeholder="Obligatorio si cambias el cliente o el equipo."
+                  ></textarea>
+                  <div class="form-text">
+                    Para cambios solo de falla u observaciones, el motivo es opcional.
+                  </div>
+                </div>
+              </div>
+
+              <div class="d-flex gap-2 mt-3">
+                <button
+                  type="submit"
+                  class="btn btn-primary"
+                  :disabled="sensitiveSaving || sensitiveReferenceLoading"
+                >
+                  <span
+                    v-if="sensitiveSaving"
+                    class="spinner-border spinner-border-sm me-2"
+                    role="status"
+                  ></span>
+                  {{ sensitiveSaving ? 'Guardando...' : 'Guardar cambios' }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-outline-secondary"
+                  :disabled="sensitiveSaving"
+                  @click="cancelSensitiveOrderEdit"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </form>
+
             <div class="row g-3 mt-1">
               <div class="col-md-6">
                 <div class="mc-muted small">Equipo</div>
@@ -3238,6 +3702,80 @@ watch(() => route.params.id, loadOrder, { immediate: true })
             <div v-else class="text-muted">Sin datos disponibles.</div>
             <div v-if="times" class="small text-muted mt-2">
               Calculado al consultar la orden. Los tiempos pueden seguir aumentando.
+            </div>
+          </div>
+        </div>
+
+        <div v-if="canViewSensitiveHistory" class="col-12">
+          <div class="mc-card p-4">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+              <div>
+                <h5 class="mb-1">Historial de cambios sensibles</h5>
+                <div class="small text-muted">
+                  Auditoría de cliente, equipo, falla reportada y observaciones iniciales.
+                </div>
+              </div>
+              <button
+                type="button"
+                class="btn btn-sm btn-outline-secondary"
+                :disabled="sensitiveHistoryLoading"
+                @click="loadSensitiveHistory()"
+              >
+                Actualizar
+              </button>
+            </div>
+
+            <div v-if="sensitiveHistoryLoading" class="text-muted">
+              <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+              Cargando historial...
+            </div>
+
+            <div
+              v-else-if="sensitiveHistoryError"
+              class="alert alert-warning mb-0"
+              role="alert"
+            >
+              {{ sensitiveHistoryError }}
+            </div>
+
+            <div v-else-if="!sensitiveChanges.length" class="text-muted">
+              Aún no existen cambios sensibles registrados para esta orden.
+            </div>
+
+            <div v-else class="table-responsive">
+              <table class="table table-sm align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Campo</th>
+                    <th>Anterior</th>
+                    <th>Nuevo</th>
+                    <th>Motivo</th>
+                    <th>Usuario</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="item in sensitiveChanges" :key="item.id">
+                    <td class="text-nowrap">{{ formatDate(item.changed_at) }}</td>
+                    <td>{{ item.field_display || item.field }}</td>
+                    <td style="min-width: 160px; white-space: pre-wrap;">
+                      {{ formatSensitiveValue(item.old_value) }}
+                    </td>
+                    <td style="min-width: 160px; white-space: pre-wrap;">
+                      {{ formatSensitiveValue(item.new_value) }}
+                    </td>
+                    <td style="min-width: 160px; white-space: pre-wrap;">
+                      {{ item.reason || 'Sin motivo registrado' }}
+                    </td>
+                    <td class="text-nowrap">
+                      {{ item.changed_by_username || 'No disponible' }}
+                      <div class="small text-muted">
+                        {{ sensitiveRoleLabel(item.changed_by_role) }}
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
