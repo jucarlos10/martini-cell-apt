@@ -215,6 +215,7 @@ class OrderWarrantyHistorySerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "warranty",
+            "warranty_id_snapshot",
             "revision",
             "action",
             "order",
