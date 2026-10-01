@@ -608,6 +608,22 @@ class OrderWarranty(models.Model):
                     )
                 })
 
+            # La validación del serializador puede haber cargado el uso
+            # antes de que otra transacción lo anule. Consultar la base
+            # otra vez evita crear la garantía con ese dato obsoleto.
+            from inventory.models import OrderPart
+
+            if OrderPart.objects.filter(
+                pk=self.order_part_id,
+                is_cancelled=True,
+            ).exists():
+                raise ValidationError({
+                    "order_part": (
+                        "No se puede registrar una garantía sobre "
+                        "un uso de repuesto anulado."
+                    )
+                })
+
         if not self.is_applicable:
             if self.starts_on is not None or self.ends_on is not None:
                 raise ValidationError(

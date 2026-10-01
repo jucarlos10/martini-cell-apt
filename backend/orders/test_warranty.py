@@ -149,6 +149,23 @@ class OrderWarrantyTests(APITestCase):
             format="json",
         )
 
+    def test_cancelled_part_usage_cannot_receive_warranty_via_api(self):
+        OrderPart.objects.filter(pk=self.order_part.pk).update(
+            is_cancelled=True,
+            cancellation_reason="Uso asociado por error.",
+            cancelled_by=self.admin,
+            cancelled_by_username=self.admin.username,
+            cancelled_by_role=self.admin.role,
+            cancelled_at=timezone.now(),
+        )
+
+        response = self.create_part_warranty()
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("order_part", response.data)
+        self.assertFalse(OrderWarranty.objects.exists())
+        self.assertFalse(OrderWarrantyHistory.objects.exists())
+
     def detail_url(self, warranty_id):
         return reverse(
             "order-warranty-detail",
