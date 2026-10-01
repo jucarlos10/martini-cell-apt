@@ -20,12 +20,14 @@ from accounts.permissions import (
 
 from .models import (
     OrderEvidence,
+    OrderSensitiveChangeHistory,
     OrderStatusHistory,
     OrderTechnicalReport,
     ServiceOrder,
 )
 from .serializers import (
     OrderEvidenceSerializer,
+    OrderSensitiveChangeHistorySerializer,
     OrderTechnicalReportHistorySerializer,
     OrderTechnicalReportSerializer,
     ServiceOrderSerializer,
@@ -174,6 +176,34 @@ class ServiceOrderDetailView(RetrieveUpdateAPIView):
         IsAuthenticated,
         CanManageOperationalRecord,
     ]
+
+
+# HU-27: historial inmutable de cambios sensibles de la orden.
+class OrderSensitiveChangeHistoryView(APIView):
+    permission_classes = [
+        IsAuthenticated,
+        IsAdminOrTechRole,
+    ]
+
+    def get(self, request, pk):
+        order = get_object_or_404(
+            ServiceOrder,
+            pk=pk,
+        )
+
+        history = (
+            OrderSensitiveChangeHistory.objects
+            .filter(order=order)
+            .select_related("changed_by")
+            .order_by("changed_at", "id")
+        )
+
+        serializer = OrderSensitiveChangeHistorySerializer(
+            history,
+            many=True,
+        )
+
+        return Response(serializer.data)
 
 
 class OrderStatusView(APIView):

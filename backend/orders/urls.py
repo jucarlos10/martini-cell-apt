@@ -6,6 +6,7 @@ from .public_tracking import PublicOrderStatusView
 from .views import (
     OrderEvidenceDownloadView,
     OrderEvidenceListCreateView,
+    OrderSensitiveChangeHistoryView,
     OrderStatusHistoryView,
     OrderStatusView,
     OrderTechnicalReportHistoryView,
@@ -64,6 +65,12 @@ urlpatterns = [
         "<int:pk>/",
         ServiceOrderDetailView.as_view(),
         name="service-order-detail",
+    ),
+    # HU-27: Historial de cambios sensibles de la orden.
+    path(
+        "<int:pk>/sensitive-changes/",
+        OrderSensitiveChangeHistoryView.as_view(),
+        name="order-sensitive-change-history",
     ),
     path(
         "<int:pk>/status/",
