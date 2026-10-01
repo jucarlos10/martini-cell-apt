@@ -99,6 +99,14 @@ class OrderWarrantyWriteSerializer(serializers.ModelSerializer):
                     )
                 })
 
+            if order_part.is_cancelled:
+                raise serializers.ValidationError({
+                    "order_part": (
+                        "No se puede registrar una garantía sobre "
+                        "un uso de repuesto anulado."
+                    )
+                })
+
         if not is_applicable:
             if starts_on is not None or ends_on is not None:
                 raise serializers.ValidationError({
