@@ -693,6 +693,10 @@ class OrderWarrantyHistory(models.Model):
         related_name="history",
     )
 
+    # La FK se pone en NULL al borrar físicamente la garantía. Esta copia
+    # permite consultar las revisiones por el ID original después del borrado.
+    warranty_id_snapshot = models.PositiveBigIntegerField(null=True, db_index=True)
+
     revision = models.PositiveIntegerField()
 
     action = models.CharField(

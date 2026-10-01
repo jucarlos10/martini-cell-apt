@@ -224,6 +224,7 @@ class OrderWarrantyDetailView(APIView):
 
         OrderWarrantyHistory.objects.create(
             warranty=warranty,
+            warranty_id_snapshot=warranty.pk,
             revision=last_revision + 1,
             action=OrderWarrantyHistory.Action.DELETED,
             order=warranty.order,
@@ -257,13 +258,14 @@ class OrderWarrantyHistoryView(APIView):
         if denied:
             return denied
 
-        warranty = get_object_or_404(
-            OrderWarranty,
-            pk=warranty_id,
+        history = OrderWarrantyHistory.objects.filter(
             order_id=pk,
-        )
-
-        history = warranty.history.all().order_by("revision")
+            warranty_id_snapshot=warranty_id,
+        ).order_by("revision")
+        if not history.exists():
+            # Conserva la respuesta previa para garantías existentes sin
+            # historial, si hubiera registros heredados sin revisiones.
+            get_object_or_404(OrderWarranty, pk=warranty_id, order_id=pk)
 
         return Response(
             OrderWarrantyHistorySerializer(

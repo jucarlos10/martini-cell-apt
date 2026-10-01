@@ -90,6 +90,7 @@ def save_warranty_with_history(
 
     OrderWarrantyHistory.objects.create(
         warranty=warranty,
+        warranty_id_snapshot=warranty.pk,
         revision=last_revision + 1,
         action=action,
         order=locked_order,

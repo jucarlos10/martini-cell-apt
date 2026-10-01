@@ -1,6 +1,6 @@
 HU-26 — Matriz de permisos por perfil
 1. Estado del documento
-Estado: propuesta técnica implementada y validada técnicamente. Pendiente de validación funcional con Marcos antes de cerrar HU-26.
+Estado: propuesta técnica implementada y validada técnicamente. El responsable del proyecto comunicó el 30-09-2026 la conformidad general de Marcos para avanzar sin otra ronda formal; quedan comprobaciones puntuales de datos por perfil y el recorrido funcional antes de cerrar HU-26.
 Esta matriz define el comportamiento esperado para los perfiles `ADMIN`, `TECH` y `HELPER` en la plataforma Martini Cell. La autorización debe aplicarse en el backend. Ocultar botones o secciones en Vue es solo una medida de apoyo visual y no reemplaza la validación de permisos de la API.
 La definición considera la administración de usuarios existente, las reglas transversales de TEC-03, el flujo de garantías de HU-23 y la futura trazabilidad de cambios sensibles de HU-27.
 2. Perfiles
@@ -56,7 +56,7 @@ Consulta pública por código de seguimiento	Sí, sin sesión	Sí, sin sesión	S
 4. Datos personales y financieros
 4.1. Datos de clientes
 La propuesta actual permite que `ADMIN`, `TECH` y `HELPER` consulten los datos de identificación y contacto necesarios para el proceso de recepción, incluyendo RUT, nombre, teléfono y correo cuando exista.
-Esta decisión se justifica funcionalmente porque `HELPER` puede registrar clientes, equipos y órdenes. Debe ser confirmada con Marcos antes de considerar la matriz validada.
+Esta decisión se justifica funcionalmente porque `HELPER` puede registrar clientes, equipos y órdenes. La conformidad general comunicada permite trabajar con esta matriz como línea de base; el alcance exacto de RUT y contacto para recepción requiere una comprobación puntual, sin ampliar acceso mientras tanto.
 El historial interno de modificaciones de clientes no se muestra a `HELPER`.
 4.2. Información financiera
 `HELPER` no debe recibir costos unitarios, subtotales de repuestos, costos de la orden, precios ni márgenes.
@@ -167,12 +167,12 @@ vite v5.4.8 building for production...
 git diff --check
 ```
 El comando no reportó errores de espacios ni formato en el diff.
-10. Validación funcional pendiente
-Antes de marcar HU-26 como finalizada se debe revisar esta matriz con Marcos y confirmar especialmente:
+10. Validación funcional y casos puntuales
+La conformidad general comunicada el 30-09-2026 permite avanzar. Antes de marcar HU-26 como finalizada se debe comprobar con casos reales especialmente:
 acceso de `HELPER` a RUT y datos de contacto del cliente;
 acceso de `HELPER` a la hoja de vida del equipo y evidencias;
 acceso de `HELPER` al catálogo de repuestos sin costos;
 alcance de la información financiera visible para `TECH`;
 separación entre propuesta técnica y decisión administrativa de garantías;
 coordinación de modificaciones sensibles de órdenes con HU-27.
-Una vez realizada esa revisión, este documento debe actualizarse indicando la fecha y el resultado de la validación.
+La conformidad general fue comunicada por el responsable del proyecto; no se registró una validación individual de cada fila ni una prueba manual integral. Los ajustes puntuales se deben anotar con su decisión, fecha y evidencia, y coordinar con HU-27.

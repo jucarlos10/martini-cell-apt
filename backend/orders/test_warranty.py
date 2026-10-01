@@ -497,6 +497,27 @@ class OrderWarrantyTests(APITestCase):
         # y deja de apuntar a un registro inexistente.
         self.assertIsNone(revisions[0].warranty_id)
         self.assertIsNone(revisions[1].warranty_id)
+        self.assertEqual(
+            [row.warranty_id_snapshot for row in revisions],
+            [warranty_id, warranty_id],
+        )
+
+        history_response = self.client.get(self.history_url(warranty_id))
+        self.assertEqual(history_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [item["action"] for item in history_response.data],
+            ["CREATED", "DELETED"],
+        )
+        self.assertEqual(
+            [item["warranty_id_snapshot"] for item in history_response.data],
+            [warranty_id, warranty_id],
+        )
+
+        other_order_history = self.client.get(reverse(
+            "order-warranty-history",
+            kwargs={"pk": self.other_order.pk, "warranty_id": warranty_id},
+        ))
+        self.assertEqual(other_order_history.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_deleted_warranty_disappears_from_order_and_summary(self):
         created = self.create_service_warranty()
