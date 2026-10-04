@@ -17,3 +17,7 @@ Thumbs.db
 
 # Local SQLite
 db.sqlite3
+
+# Generated static assets and private customer evidence
+backend/staticfiles/
+backend/private_media/
