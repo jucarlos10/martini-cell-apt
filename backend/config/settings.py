@@ -28,11 +28,15 @@ DEBUG = os.getenv("DJANGO_DEBUG", "false").strip().lower() in {
     "1", "true", "yes", "on",
 }
 
-ALLOWED_HOSTS = [
-    host.strip()
-    for host in os.getenv("DJANGO_ALLOWED_HOSTS", "").split(",")
-    if host.strip()
-]
+def _comma_separated_env(name, default=""):
+    return [
+        value.strip()
+        for value in os.getenv(name, default).split(",")
+        if value.strip()
+    ]
+
+
+ALLOWED_HOSTS = _comma_separated_env("DJANGO_ALLOWED_HOSTS")
 
 
 # Application definition
@@ -134,6 +138,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 
 # Email
@@ -153,14 +158,17 @@ REST_FRAMEWORK = {
     ),
 }
 
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
+CORS_ALLOWED_ORIGINS = _comma_separated_env(
+    "DJANGO_CORS_ALLOWED_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173" if DEBUG else "",
+)
+CSRF_TRUSTED_ORIGINS = _comma_separated_env("DJANGO_CSRF_TRUSTED_ORIGINS")
 
 
 # Evidencias fotográficas privadas
-MEDIA_ROOT = BASE_DIR / "private_media"
+MEDIA_ROOT = Path(
+    os.getenv("DJANGO_PRIVATE_MEDIA_ROOT", str(BASE_DIR / "private_media"))
+)
 
 # Tamaño objetivo de cada fotografía: 10 MB
 EVIDENCE_MAX_FILE_SIZE = 10 * 1024 * 1024

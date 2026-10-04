@@ -63,7 +63,9 @@ Marcos. El avance de cada historia se registra en el
 ## Documentación
 
 La [guía de cambios y estado del Kanban](docs/registro-de-cambios-y-tablero-2026-09-30.md)
-explica qué se integró, por qué se ajustó y qué sigue en pruebas. Los demás
+explica qué se integró, por qué se ajustó y qué sigue en pruebas. La
+[preparación de datos y conexión al host](docs/preparacion-dataset-y-host-2026-10-04.md)
+resume el estado del dataset y los pasos para desplegar. Los demás
 documentos técnicos están en [`docs/`](docs/) y las evidencias académicas
 de la primera fase en [`fase 1/`](fase%201/).
 
