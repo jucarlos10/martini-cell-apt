@@ -65,7 +65,9 @@ Marcos. El avance de cada historia se registra en el
 La [guía de cambios y estado del Kanban](docs/registro-de-cambios-y-tablero-2026-09-30.md)
 explica qué se integró, por qué se ajustó y qué sigue en pruebas. La
 [preparación de datos y conexión al host](docs/preparacion-dataset-y-host-2026-10-04.md)
-resume el estado del dataset y los pasos para desplegar. Los demás
+resume el estado del dataset y los pasos para desplegar. La
+[guía de integración del dataset para Oscar](docs/integracion-dataset-para-oscar.md)
+define el CSV privado y su validación local antes de evaluar HU-17. Los demás
 documentos técnicos están en [`docs/`](docs/) y las evidencias académicas
 de la primera fase en [`fase 1/`](fase%201/).
 
