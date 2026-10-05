@@ -21,3 +21,6 @@ db.sqlite3
 # Generated static assets and private customer evidence
 backend/staticfiles/
 backend/private_media/
+
+# Casos y cruces de fuentes locales: nunca versionar datos operativos privados
+private_data/

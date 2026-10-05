@@ -1,19 +1,20 @@
 # Preparación de datos y conexión al host
 
-Fecha de revisión: 04-10-2026.
+Primera revisión: 04-10-2026. Los inventarios privados pueden ampliarse; esta
+nota describe criterios de uso y despliegue, no un recuento vigente de archivos.
 
-## Estado verificable
+## Estado de las fuentes
 
-| Fuente | Encontrado | Uso actual |
-| --- | ---: | --- |
-| Movimientos comerciales con motivo técnico y modelo | 160 filas candidatas | Revisión manual; no equivalen a 160 órdenes. |
-| Fotografías del taller | 14 archivos, 13 únicos | Cinco muestran una escena técnica, pero ninguna tiene una orden comprobada. |
-| Audios accesibles para este trabajo | 0 | No hay transcripciones incorporadas. |
-| Casos reales validados para estimación de tiempo | 0 | No entrenar ni importar como dataset final. |
+| Fuente | Uso actual |
+| --- | --- |
+| Movimientos comerciales | Candidatos por revisar; cada movimiento puede ser servicio, pago parcial o venta. |
+| Fotografías del taller | Evidencias por vincular a una orden y anonimizar antes de usarlas. |
+| Audios de mensajería | Referencias por vincular; las transcripciones requieren revisión. |
+| Casos para estimación de tiempo | No hay un conjunto operacional acreditado para entrenar ML. |
 
-La planilla privada de preparación conserva para cada movimiento la hoja, celda y fecha del bloque comercial. Esa fecha **no acredita** la recepción ni la entrega del equipo. Los diez códigos MC-001 a MC-010 de la plantilla anterior siguen sin datos de caso: son espacios reservados. La planilla de inventario describe repuestos; tampoco identifica reparaciones individuales.
+La planilla privada de preparación conserva para cada movimiento la hoja, celda y fecha del bloque comercial. Esa fecha **no acredita** la recepción ni la entrega del equipo. Los códigos de la plantilla anterior que no tengan ficha completa siguen siendo espacios reservados. La planilla de inventario describe repuestos; tampoco identifica reparaciones individuales.
 
-Las fotos incluyen herramientas, equipos abiertos y contexto del local. Hay una duplicación exacta. Algunas muestran rostros, etiquetas, identificadores o información en pantalla. Antes de usar una foto de reparación se necesita asociarla a una orden real y preparar una copia anonimizada; el archivo original no se coloca en Git ni se expone como recurso público.
+Las fotos pueden incluir herramientas, equipos abiertos, rostros, etiquetas, identificadores o información en pantalla. Antes de usar una foto de reparación se necesita asociarla a una orden real y preparar una copia anonimizada; el archivo original no se coloca en Git ni se expone como recurso público.
 
 ## De candidato a caso confirmado
 
@@ -24,6 +25,9 @@ Las fotos incluyen herramientas, equipos abiertos y contexto del local. Hay una 
 5. Quitar identificadores personales del texto y de las copias de imágenes, revisar el resultado y registrar la validación de Marcos. El uso para ML requiere un caso real, finalizado, consistente y anonimizado. Para HU-17, el conjunto de entrenamiento excluye fotos y códigos de seguimiento aunque puedan conservarse como evidencias privadas del servicio.
 
 La planilla de preparación mantiene `Apto ML = No` mientras faltan datos. Su cálculo requiere una orden identificada, falla, diagnóstico, trabajo, resultado, tiempo técnico positivo, tiempo de espera numérico, anonimización y estado `Validado`. Pasar el filtro de la planilla no sustituye la revisión de procedencia y finalización descrita en [HU-17](evaluacion-hu17-estimacion-tiempo.md).
+
+La [guía para Oscar](integracion-dataset-para-oscar.md) define el contrato CSV
+privado y el validador local que se aplicarán después de confirmar los casos.
 
 ## Correspondencia con el sistema
 

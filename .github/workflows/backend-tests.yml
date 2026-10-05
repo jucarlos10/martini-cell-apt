@@ -44,6 +44,8 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - name: Instalar dependencias
         run: python -m pip install -r backend/requirements.txt
+      - name: Verificar contrato CSV de HU-17 con datos sintéticos
+        run: python -m unittest discover -s tools -p 'test_*.py'
       - name: Ejecutar pruebas de Django
         working-directory: backend
         run: python manage.py test --noinput
