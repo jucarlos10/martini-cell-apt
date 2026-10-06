@@ -49,6 +49,12 @@ también se ignora; **no se copia al host** solo por publicar la aplicación.
    cuando corresponda, `DB_SSLROOTCERT` según el certificado del proveedor.
    Para un servidor con certificado verificable, preferir `verify-full`.
    Bajo el mismo origen HTTPS, dejar `DJANGO_CORS_ALLOWED_ORIGINS` vacío.
+   En producción se usa SMTP en vez de escribir correos en los registros del
+   servidor. La aplicación no envía correos actualmente; si se habilita esa
+   función, configurar `DJANGO_SMTP_HOST`, `DJANGO_SMTP_PORT`,
+   `DJANGO_SMTP_USERNAME`, `DJANGO_SMTP_PASSWORD` y `DJANGO_SMTP_USE_TLS` con
+   un servicio real. Sin ellos, el valor local `localhost:25` no garantiza la
+   entrega.
 2. Instalar dependencias y preparar la base y los estáticos:
 
    ```bash
@@ -69,6 +75,9 @@ también se ignora; **no se copia al host** solo por publicar la aplicación.
    Iniciar `DJANGO_SECURE_HSTS_SECONDS=3600` solo cuando el sitio funcione de
    forma estable por HTTPS; revisarlo antes de aumentar la duración. Las cookies
    de Django admin y CSRF ya son seguras cuando `DEBUG=false`.
+   `check --deploy` puede advertir sobre HSTS para subdominios y precarga.
+   Resolverlas solo después de confirmar que **todos** los subdominios usarán
+   HTTPS y que se desea incluir el dominio en la lista de precarga.
 5. Ejecutar Gunicorn desde `backend/` mediante el administrador de procesos
    del host. En un VPS con Nginx delante, la orden de referencia es:
 

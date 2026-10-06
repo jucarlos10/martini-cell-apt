@@ -157,11 +157,26 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/
 
-MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
-    },
-}
+if DEBUG:
+    MAILERS = {
+        "default": {
+            "BACKEND": "django.core.mail.backends.console.EmailBackend",
+        },
+    }
+else:
+    MAILERS = {
+        "default": {
+            "BACKEND": "django.core.mail.backends.smtp.EmailBackend",
+            "OPTIONS": {
+                "host": os.getenv("DJANGO_SMTP_HOST", "localhost"),
+                "port": int(os.getenv("DJANGO_SMTP_PORT", "25")),
+                "username": os.getenv("DJANGO_SMTP_USERNAME", ""),
+                "password": os.getenv("DJANGO_SMTP_PASSWORD", ""),
+                "use_tls": _enabled("DJANGO_SMTP_USE_TLS"),
+                "timeout": 10,
+            },
+        },
+    }
 
 AUTH_USER_MODEL = "accounts.User"
 
