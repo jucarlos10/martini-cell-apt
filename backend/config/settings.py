@@ -28,6 +28,12 @@ DEBUG = os.getenv("DJANGO_DEBUG", "false").strip().lower() in {
     "1", "true", "yes", "on",
 }
 
+
+def _enabled(name):
+    return os.getenv(name, "false").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
 def _comma_separated_env(name, default=""):
     return [
         value.strip()
@@ -92,6 +98,12 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
+_db_options = {}
+if os.getenv("DB_SSLMODE"):
+    _db_options["sslmode"] = os.environ["DB_SSLMODE"]
+if os.getenv("DB_SSLROOTCERT"):
+    _db_options["sslrootcert"] = os.environ["DB_SSLROOTCERT"]
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
@@ -100,6 +112,7 @@ DATABASES = {
         "PASSWORD": os.getenv("DB_PASSWORD"),
         "HOST": os.getenv("DB_HOST"),
         "PORT": os.getenv("DB_PORT"),
+        "OPTIONS": _db_options,
     }
 }
 
@@ -144,11 +157,26 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/
 
-MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
-    },
-}
+if DEBUG:
+    MAILERS = {
+        "default": {
+            "BACKEND": "django.core.mail.backends.console.EmailBackend",
+        },
+    }
+else:
+    MAILERS = {
+        "default": {
+            "BACKEND": "django.core.mail.backends.smtp.EmailBackend",
+            "OPTIONS": {
+                "host": os.getenv("DJANGO_SMTP_HOST", "localhost"),
+                "port": int(os.getenv("DJANGO_SMTP_PORT", "25")),
+                "username": os.getenv("DJANGO_SMTP_USERNAME", ""),
+                "password": os.getenv("DJANGO_SMTP_PASSWORD", ""),
+                "use_tls": _enabled("DJANGO_SMTP_USE_TLS"),
+                "timeout": 10,
+            },
+        },
+    }
 
 AUTH_USER_MODEL = "accounts.User"
 
@@ -163,6 +191,19 @@ CORS_ALLOWED_ORIGINS = _comma_separated_env(
     "http://localhost:5173,http://127.0.0.1:5173" if DEBUG else "",
 )
 CSRF_TRUSTED_ORIGINS = _comma_separated_env("DJANGO_CSRF_TRUSTED_ORIGINS")
+
+# Las cookies de Django admin y CSRF solo circulan sobre HTTPS en producción.
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+
+# Activar el redireccionamiento al confirmar el proxy HTTPS del host. El proxy
+# debe sobrescribir X-Forwarded-Proto y Gunicorn debe aceptar solo tráfico suyo.
+SECURE_SSL_REDIRECT = _enabled("DJANGO_SECURE_SSL_REDIRECT")
+if _enabled("DJANGO_TRUST_X_FORWARDED_PROTO"):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Empezar con una duración corta solo después de probar HTTPS extremo a extremo.
+SECURE_HSTS_SECONDS = int(os.getenv("DJANGO_SECURE_HSTS_SECONDS", "0"))
 
 
 # Evidencias fotográficas privadas

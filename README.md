@@ -71,6 +71,10 @@ define el CSV privado y su validación local antes de evaluar HU-17. Los demás
 documentos técnicos están en [`docs/`](docs/) y las evidencias académicas
 de la primera fase en [`fase 1/`](fase%201/).
 
+La [guía de conexión al host para Oscar](docs/conexion-host-para-oscar.md)
+describe el despliegue HTTPS de la API y Vue bajo un mismo dominio, los datos
+que faltan del proveedor y las pruebas de conexión.
+
 ## Estructura del repositorio
 
 La estructura actual es:
