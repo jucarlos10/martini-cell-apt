@@ -72,7 +72,7 @@ jobs:
             echo "La comprobación aceptó un servicio Railway sin volumen" >&2
             exit 1
           fi
-          rg -q 'Railway necesita un volumen persistente' "$RUNNER_TEMP/host-sin-volumen.log"
+          grep -q 'Railway necesita un volumen persistente' "$RUNNER_TEMP/host-sin-volumen.log"
       - name: Ejecutar pruebas de Django
         working-directory: backend
         run: python manage.py test --noinput
