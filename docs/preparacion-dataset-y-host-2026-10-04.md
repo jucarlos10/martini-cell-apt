@@ -43,6 +43,12 @@ privado y el validador local que se aplicarán después de confirmar los casos.
 
 ## Preparación técnica del host para Oscar
 
+Actualización 07-10-2026: Oscar integró el despliegue Vercel/Railway en el
+[PR #87](https://github.com/jucarlos10/martini-cell-apt/pull/87). La
+[guía de conexión vigente](conexion-host-para-oscar.md) registra la URL y las
+verificaciones que faltan; los pasos siguientes conservan la situación de la
+primera revisión del 04-10-2026.
+
 El repositorio ya tiene Django, PostgreSQL, frontend Vue/Vite y rutas `/api/`. Esta revisión incorpora `STATIC_ROOT`, variables para los orígenes permitidos y una ruta configurable para fotos privadas. El destino del host, dominio, volumen persistente y método de despliegue aún no están definidos en el repositorio.
 
 1. Definir el dominio y cómo el servidor enviará `/api/` al backend. El frontend usa rutas `/api/` relativas; servirlo bajo el mismo origen simplifica la conexión. Configurar la ruta de retorno de Vue para las páginas internas.
@@ -51,4 +57,6 @@ El repositorio ya tiene Django, PostgreSQL, frontend Vue/Vite y rutas `/api/`. E
 4. Instalar las dependencias, ejecutar `python manage.py migrate`, `python manage.py collectstatic --noinput` y `python manage.py check --deploy` con la configuración real. Servir `STATIC_ROOT` para los recursos de Django; usar un servidor WSGI/ASGI de producción, no `runserver`.
 5. Ejecutar `npm ci` y `npm run build` en `frontend/`, servir `dist/` como aplicación estática y comprobar las rutas de Vue. Probar inicio de sesión, creación/consulta de orden, una foto anonimizada de ensayo y su descarga con sesión. Verificar copias de seguridad de PostgreSQL y de las evidencias privadas.
 
-Esto es preparación y criterios de prueba. No hay URL, credenciales ni conexión al host configuradas todavía, y las pruebas de CI no sustituyen una prueba sobre el destino real.
+En esta primera revisión del 04-10-2026 aún no había URL ni conexión al host;
+el despliegue posterior está registrado en la guía vigente. Las pruebas de CI
+no sustituyen una prueba sobre el destino real.
