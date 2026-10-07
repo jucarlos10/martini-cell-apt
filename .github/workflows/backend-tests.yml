@@ -56,6 +56,16 @@ jobs:
           DJANGO_TRUST_X_FORWARDED_PROTO: "true"
           DJANGO_SECURE_HSTS_SECONDS: "3600"
         run: python manage.py check --deploy --fail-level ERROR
+      - name: Ensayar comprobación previa del host
+        env:
+          DJANGO_SECRET_KEY: clave-exclusiva-de-verificacion-de-despliegue-no-usar-en-host-123456789
+          DJANGO_ALLOWED_HOSTS: martini.test
+          DJANGO_PRIVATE_MEDIA_ROOT: ${{ runner.temp }}/martini-media
+        run: |
+          mkdir -p "$DJANGO_PRIVATE_MEDIA_ROOT"
+          python backend/manage.py migrate --noinput
+          python backend/manage.py collectstatic --noinput
+          python deploy/check_host.py
       - name: Ejecutar pruebas de Django
         working-directory: backend
         run: python manage.py test --noinput

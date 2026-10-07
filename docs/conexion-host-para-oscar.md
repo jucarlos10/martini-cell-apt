@@ -55,15 +55,26 @@ también se ignora; **no se copia al host** solo por publicar la aplicación.
    `DJANGO_SMTP_USERNAME`, `DJANGO_SMTP_PASSWORD` y `DJANGO_SMTP_USE_TLS` con
    un servicio real. Sin ellos, el valor local `localhost:25` no garantiza la
    entrega.
-2. Instalar dependencias y preparar la base y los estáticos:
+2. Instalar dependencias en un entorno virtual y preparar la base y los
+   estáticos desde la raíz del repositorio:
 
    ```bash
-   python -m pip install -r backend/requirements-deploy.txt
-   cd backend
-   python manage.py migrate
-   python manage.py collectstatic --noinput
-   python manage.py check --deploy
+   python3.12 -m venv .venv
+   .venv/bin/python -m pip install -r backend/requirements-deploy.txt
+   .venv/bin/python backend/manage.py migrate --noinput
+   .venv/bin/python backend/manage.py collectstatic --noinput
+   .venv/bin/python backend/manage.py check --deploy
+   .venv/bin/python deploy/check_host.py
    ```
+
+   Ejecutar estos comandos **con el mismo usuario y las mismas variables de
+   entorno que Gunicorn**. Crear previamente el volumen privado; el proceso
+   debe poder escribir allí. La última comprobación lee PostgreSQL, detecta
+   migraciones pendientes, verifica los archivos estáticos y prueba escritura
+   temporal en la carpeta privada; no modifica datos de órdenes ni ejecuta
+   migraciones. Si falla, corregir los mensajes antes de iniciar el sitio.
+   Su persistencia y respaldos se confirman en el panel del proveedor: la
+   comprobación local no puede demostrarlo.
 
 3. Compilar Vue desde `frontend/` con `npm ci` y `npm run build`. Configurar
    el proxy del host; si es un VPS con Nginx, obtener el certificado TLS,
@@ -86,7 +97,14 @@ también se ignora; **no se copia al host** solo por publicar la aplicación.
    ```
 
    La plataforma administrada puede exigir `0.0.0.0:$PORT` dentro de su red
-   privada. Restringir el acceso público al puerto de Gunicorn.
+   privada. Restringir el acceso público al puerto de Gunicorn. Para un VPS
+   con systemd, adaptar
+   [`martini-cell.service.example`](../deploy/martini-cell.service.example) al
+   usuario `martini`, la ruta `/srv/martini-cell` y el archivo `.env` privados.
+   Colocar la unidad en `/etc/systemd/system/martini-cell.service`, ejecutar
+   `systemctl daemon-reload`, `systemctl enable --now martini-cell` y revisar
+   `systemctl status martini-cell` y `journalctl -u martini-cell`. El ejemplo
+   de Nginx usa el mismo puerto local `127.0.0.1:8000`.
 
 ## Pruebas de conexión
 
