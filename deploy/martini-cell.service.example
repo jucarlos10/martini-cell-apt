@@ -1,0 +1,20 @@
+# Ejemplo para VPS con systemd. Ajustar usuario, rutas y puerto al host real.
+[Unit]
+Description=Martini Cell API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=martini
+Group=martini
+WorkingDirectory=/srv/martini-cell/backend
+EnvironmentFile=/srv/martini-cell/backend/.env
+ExecStart=/srv/martini-cell/.venv/bin/gunicorn config.wsgi:application --bind 127.0.0.1:8000 --workers 2 --access-logfile - --error-logfile -
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
