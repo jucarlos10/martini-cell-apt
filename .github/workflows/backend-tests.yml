@@ -58,6 +58,7 @@ jobs:
         run: python manage.py check --deploy --fail-level ERROR
       - name: Ensayar comprobación previa del host
         env:
+          DJANGO_SECRET_KEY: clave-exclusiva-de-verificacion-de-despliegue-no-usar-en-host-123456789
           DJANGO_ALLOWED_HOSTS: martini.test
           DJANGO_PRIVATE_MEDIA_ROOT: ${{ runner.temp }}/martini-media
         run: |
