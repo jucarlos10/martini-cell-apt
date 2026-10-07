@@ -22,6 +22,9 @@ jobs:
       - name: Instalar dependencias
         working-directory: frontend
         run: npm ci
+      - name: Probar sesión del frontend
+        working-directory: frontend
+        run: npm test
       - name: Compilar aplicación Vue
         working-directory: frontend
         run: npm run build
