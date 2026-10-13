@@ -132,7 +132,6 @@ onBeforeUnmount(() => {
               autocomplete="off"
               autocapitalize="characters"
               :aria-invalid="Boolean(error)"
-              :disabled="loading"
               required
             >
           </div>
