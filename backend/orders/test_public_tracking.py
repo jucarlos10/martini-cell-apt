@@ -1,4 +1,3 @@
-
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -35,9 +34,43 @@ class PublicOrderTrackingTests(SimpleTestCase):
             client_name="Cliente de prueba",
         )
 
-    @patch("orders.public_tracking.ServiceOrder.objects.filter")
-    def test_valid_code_works_without_login(self, mock_filter):
-        mock_filter.return_value.first.return_value = self.order
+        # Historial público seguro.
+        # Solo contiene estado, nombre visible y fecha.
+        self.history = [
+            SimpleNamespace(
+                to_status="RECEIVED",
+                get_to_status_display=lambda: "Ingresado",
+                changed_at=datetime(
+                    2026, 9, 24, 4, 30, tzinfo=timezone.utc
+                ),
+            ),
+            SimpleNamespace(
+                to_status="DIAGNOSIS",
+                get_to_status_display=lambda: "Diagnóstico",
+                changed_at=datetime(
+                    2026, 9, 24, 5, 10, tzinfo=timezone.utc
+                ),
+            ),
+        ]
+
+    def configure_history_mock(self, mock_history_filter):
+        mock_history_filter.return_value.order_by.return_value = (
+            self.history
+        )
+
+    @patch(
+        "orders.public_tracking.OrderStatusHistory.objects.filter"
+    )
+    @patch(
+        "orders.public_tracking.ServiceOrder.objects.filter"
+    )
+    def test_valid_code_works_without_login(
+        self,
+        mock_order_filter,
+        mock_history_filter,
+    ):
+        mock_order_filter.return_value.first.return_value = self.order
+        self.configure_history_mock(mock_history_filter)
 
         # No enviamos usuario, contraseña ni token.
         response = self.client.get(self.url)
@@ -57,16 +90,37 @@ class PublicOrderTrackingTests(SimpleTestCase):
             "DIAGNOSIS",
         )
 
-        mock_filter.assert_called_once_with(
+        self.assertEqual(
+            len(response.data["history"]),
+            2,
+        )
+
+        mock_order_filter.assert_called_once_with(
             tracking_code=self.code
         )
 
-    @patch("orders.public_tracking.ServiceOrder.objects.filter")
+        mock_history_filter.assert_called_once_with(
+            order=self.order
+        )
+
+        mock_history_filter.return_value.order_by.assert_called_once_with(
+            "changed_at",
+            "id",
+        )
+
+    @patch(
+        "orders.public_tracking.OrderStatusHistory.objects.filter"
+    )
+    @patch(
+        "orders.public_tracking.ServiceOrder.objects.filter"
+    )
     def test_public_response_contains_only_allowed_fields(
         self,
-        mock_filter,
+        mock_order_filter,
+        mock_history_filter,
     ):
-        mock_filter.return_value.first.return_value = self.order
+        mock_order_filter.return_value.first.return_value = self.order
+        self.configure_history_mock(mock_history_filter)
 
         response = self.client.get(self.url)
 
@@ -82,12 +136,88 @@ class PublicOrderTrackingTests(SimpleTestCase):
                 "status",
                 "status_display",
                 "updated_at",
+                "history",
             },
         )
 
-    @patch("orders.public_tracking.ServiceOrder.objects.filter")
-    def test_nonexistent_code_returns_404(self, mock_filter):
-        mock_filter.return_value.first.return_value = None
+    @patch(
+        "orders.public_tracking.OrderStatusHistory.objects.filter"
+    )
+    @patch(
+        "orders.public_tracking.ServiceOrder.objects.filter"
+    )
+    def test_public_history_contains_only_allowed_fields(
+        self,
+        mock_order_filter,
+        mock_history_filter,
+    ):
+        mock_order_filter.return_value.first.return_value = self.order
+        self.configure_history_mock(mock_history_filter)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+        )
+
+        self.assertEqual(
+            set(response.data["history"][0].keys()),
+            {
+                "status",
+                "status_display",
+                "changed_at",
+            },
+        )
+
+    @patch(
+        "orders.public_tracking.OrderStatusHistory.objects.filter"
+    )
+    @patch(
+        "orders.public_tracking.ServiceOrder.objects.filter"
+    )
+    def test_public_history_returns_expected_states(
+        self,
+        mock_order_filter,
+        mock_history_filter,
+    ):
+        mock_order_filter.return_value.first.return_value = self.order
+        self.configure_history_mock(mock_history_filter)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(
+            response.data["history"][0]["status"],
+            "RECEIVED",
+        )
+
+        self.assertEqual(
+            response.data["history"][0]["status_display"],
+            "Ingresado",
+        )
+
+        self.assertEqual(
+            response.data["history"][1]["status"],
+            "DIAGNOSIS",
+        )
+
+        self.assertEqual(
+            response.data["history"][1]["status_display"],
+            "Diagnóstico",
+        )
+
+    @patch(
+        "orders.public_tracking.OrderStatusHistory.objects.filter"
+    )
+    @patch(
+        "orders.public_tracking.ServiceOrder.objects.filter"
+    )
+    def test_nonexistent_code_returns_404(
+        self,
+        mock_order_filter,
+        mock_history_filter,
+    ):
+        mock_order_filter.return_value.first.return_value = None
 
         response = self.client.get(self.url)
 
@@ -101,10 +231,18 @@ class PublicOrderTrackingTests(SimpleTestCase):
             "No se encontró una orden con ese código.",
         )
 
-    @patch("orders.public_tracking.ServiceOrder.objects.filter")
+        mock_history_filter.assert_not_called()
+
+    @patch(
+        "orders.public_tracking.OrderStatusHistory.objects.filter"
+    )
+    @patch(
+        "orders.public_tracking.ServiceOrder.objects.filter"
+    )
     def test_invalid_format_returns_404_without_database_query(
         self,
-        mock_filter,
+        mock_order_filter,
+        mock_history_filter,
     ):
         invalid_url = reverse(
             "public-order-status",
@@ -118,14 +256,21 @@ class PublicOrderTrackingTests(SimpleTestCase):
             status.HTTP_404_NOT_FOUND,
         )
 
-        mock_filter.assert_not_called()
+        mock_order_filter.assert_not_called()
+        mock_history_filter.assert_not_called()
 
-    @patch("orders.public_tracking.ServiceOrder.objects.filter")
+    @patch(
+        "orders.public_tracking.OrderStatusHistory.objects.filter"
+    )
+    @patch(
+        "orders.public_tracking.ServiceOrder.objects.filter"
+    )
     def test_invalid_and_nonexistent_codes_have_same_message(
         self,
-        mock_filter,
+        mock_order_filter,
+        mock_history_filter,
     ):
-        mock_filter.return_value.first.return_value = None
+        mock_order_filter.return_value.first.return_value = None
 
         invalid_url = reverse(
             "public-order-status",
@@ -145,6 +290,8 @@ class PublicOrderTrackingTests(SimpleTestCase):
             nonexistent_response.data,
         )
 
+        mock_history_filter.assert_not_called()
+
     def test_post_method_is_not_allowed(self):
         response = self.client.post(
             self.url,
@@ -157,9 +304,19 @@ class PublicOrderTrackingTests(SimpleTestCase):
             status.HTTP_405_METHOD_NOT_ALLOWED,
         )
 
-    @patch("orders.public_tracking.ServiceOrder.objects.filter")
-    def test_rate_limit_blocks_21st_request(self, mock_filter):
-        mock_filter.return_value.first.return_value = self.order
+    @patch(
+        "orders.public_tracking.OrderStatusHistory.objects.filter"
+    )
+    @patch(
+        "orders.public_tracking.ServiceOrder.objects.filter"
+    )
+    def test_rate_limit_blocks_21st_request(
+        self,
+        mock_order_filter,
+        mock_history_filter,
+    ):
+        mock_order_filter.return_value.first.return_value = self.order
+        self.configure_history_mock(mock_history_filter)
 
         # Caché independiente para que otras pruebas no
         # alteren el contador de solicitudes.
@@ -189,5 +346,14 @@ class PublicOrderTrackingTests(SimpleTestCase):
             status.HTTP_429_TOO_MANY_REQUESTS,
         )
 
-        # La solicitud bloqueada no debe consultar la orden.
-        self.assertEqual(mock_filter.call_count, 20)
+        # La solicitud bloqueada no debe consultar la orden
+        # ni el historial.
+        self.assertEqual(
+            mock_order_filter.call_count,
+            20,
+        )
+
+        self.assertEqual(
+            mock_history_filter.call_count,
+            20,
+        )

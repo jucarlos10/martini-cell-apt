@@ -42,12 +42,6 @@ class PublicOrderStatusSerializer(serializers.ModelSerializer):
         read_only=True,
     )
 
-    history = PublicStatusHistorySerializer(
-        source="status_history",
-        many=True,
-        read_only=True,
-    )
-
     class Meta:
         model = ServiceOrder
         fields = (
@@ -55,7 +49,6 @@ class PublicOrderStatusSerializer(serializers.ModelSerializer):
             "status",
             "status_display",
             "updated_at",
-            "history",
         )
         read_only_fields = fields
 
@@ -71,18 +64,26 @@ class PublicOrderStatusView(APIView):
         if not re.fullmatch(r"MC-[0-9A-F]{12}", tracking_code):
             raise NotFound(error_message)
 
-        order = (
-            ServiceOrder.objects
-            .prefetch_related("status_history")
-            .filter(
-                tracking_code=tracking_code,
-            )
-            .first()
-        )
+        order = ServiceOrder.objects.filter(
+            tracking_code=tracking_code,
+        ).first()
 
         if order is None:
             raise NotFound(error_message)
 
-        serializer = PublicOrderStatusSerializer(order)
+        history = (
+            OrderStatusHistory.objects
+            .filter(order=order)
+            .order_by("changed_at", "id")
+        )
 
-        return Response(serializer.data)
+        order_serializer = PublicOrderStatusSerializer(order)
+        history_serializer = PublicStatusHistorySerializer(
+            history,
+            many=True,
+        )
+
+        response_data = dict(order_serializer.data)
+        response_data["history"] = history_serializer.data
+
+        return Response(response_data)
