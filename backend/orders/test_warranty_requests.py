@@ -703,6 +703,7 @@ class WarrantyRequestTests(APITestCase):
                 "status",
                 "status_display",
                 "updated_at",
+                "history",
             },
         )
         self.assertNotIn("client_rut", response.data)
