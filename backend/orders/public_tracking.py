@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
-from .models import ServiceOrder
+from .models import OrderStatusHistory, ServiceOrder
 
 
 class PublicTrackingThrottle(AnonRateThrottle):
@@ -15,9 +15,36 @@ class PublicTrackingThrottle(AnonRateThrottle):
     rate = "20/hour"
 
 
+class PublicStatusHistorySerializer(serializers.ModelSerializer):
+    status = serializers.CharField(
+        source="to_status",
+        read_only=True,
+    )
+
+    status_display = serializers.CharField(
+        source="get_to_status_display",
+        read_only=True,
+    )
+
+    class Meta:
+        model = OrderStatusHistory
+        fields = (
+            "status",
+            "status_display",
+            "changed_at",
+        )
+        read_only_fields = fields
+
+
 class PublicOrderStatusSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(
         source="get_status_display",
+        read_only=True,
+    )
+
+    history = PublicStatusHistorySerializer(
+        source="status_history",
+        many=True,
         read_only=True,
     )
 
@@ -28,6 +55,7 @@ class PublicOrderStatusSerializer(serializers.ModelSerializer):
             "status",
             "status_display",
             "updated_at",
+            "history",
         )
         read_only_fields = fields
 
@@ -43,9 +71,14 @@ class PublicOrderStatusView(APIView):
         if not re.fullmatch(r"MC-[0-9A-F]{12}", tracking_code):
             raise NotFound(error_message)
 
-        order = ServiceOrder.objects.filter(
-            tracking_code=tracking_code,
-        ).first()
+        order = (
+            ServiceOrder.objects
+            .prefetch_related("status_history")
+            .filter(
+                tracking_code=tracking_code,
+            )
+            .first()
+        )
 
         if order is None:
             raise NotFound(error_message)
