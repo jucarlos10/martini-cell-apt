@@ -55,9 +55,13 @@ El desarrollo de la solución será incremental y las funcionalidades completada
 ## Estado del proyecto
 
 🚧 MVP en desarrollo. El backend Django y el frontend Vue están integrados en
-`main`; los PR hacia esa rama ejecutan pruebas del backend y compilan el
-frontend en GitHub Actions. Esto no sustituye la validación funcional con
-Marcos. El avance de cada historia se registra en el
+`main`; los PR hacia esa rama ejecutan pruebas del backend, pruebas de sesión
+del frontend y la compilación Vue en GitHub Actions. Oscar publicó el frontend
+en [Vercel](https://martini-cell-frontend.vercel.app/) con `/api/` hacia
+Railway ([PR #87](https://github.com/jucarlos10/martini-cell-apt/pull/87)).
+La persistencia de fotos privadas y los respaldos aún requieren comprobación
+en el host. Esto no sustituye la validación funcional con Marcos. El avance de
+cada historia se registra en el
 [tablero Kanban](https://github.com/users/jucarlos10/projects/1).
 
 ## Documentación
@@ -72,8 +76,8 @@ documentos técnicos están en [`docs/`](docs/) y las evidencias académicas
 de la primera fase en [`fase 1/`](fase%201/).
 
 La [guía de conexión al host para Oscar](docs/conexion-host-para-oscar.md)
-describe el despliegue HTTPS de la API y Vue bajo un mismo dominio, los datos
-que faltan del proveedor y las pruebas de conexión.
+registra el despliegue Vercel/Railway, las verificaciones pendientes y la
+alternativa de despliegue en un VPS.
 
 ## Estructura del repositorio
 
@@ -114,7 +118,7 @@ Vite sirve la interfaz en `http://localhost:5173` y redirige `/api` a
 `http://127.0.0.1:8000` durante el desarrollo. Para usar otro backend local,
 define `API_PROXY_TARGET` en el entorno del frontend. Las verificaciones que
 corren en cada PR son `python manage.py test --noinput` dentro de `backend/`
-y `npm run build` dentro de `frontend/`.
+y `npm test` y `npm run build` dentro de `frontend/`.
 
 ## Versionado
 
