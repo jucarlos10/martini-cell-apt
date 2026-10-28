@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 import AdminLayout from '../layouts/AdminLayout.vue'
+import IntakeReceipt from '../components/IntakeReceipt.vue'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import { authenticatedFetch, getCurrentUser } from '../services/auth'
@@ -3447,9 +3448,12 @@ watch(() => route.params.id, loadOrder, { immediate: true })
         </template>
 
         <template #actions>
-          <router-link to="/ordenes" class="btn btn-outline-secondary">
-            Volver a órdenes
-          </router-link>
+          <div class="d-flex flex-wrap gap-2">
+            <IntakeReceipt :order="order" />
+            <router-link to="/ordenes" class="btn btn-outline-secondary">
+              Volver a órdenes
+            </router-link>
+          </div>
         </template>
       </PageHeader>
 

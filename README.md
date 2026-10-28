@@ -29,6 +29,7 @@ El MVP contempla, entre otras funcionalidades:
 - Registro de tiempos técnicos y tiempos de espera.
 - Gestión de repuestos, costos, precios, márgenes y garantías.
 - Consulta del estado de una reparación mediante código.
+- Comprobante imprimible de recepción al crear una orden o abrir su detalle.
 - Visualización de indicadores operacionales.
 - Índice de viabilidad basado en reglas explicables.
 

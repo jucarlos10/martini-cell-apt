@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 
 import AdminLayout from '../layouts/AdminLayout.vue'
+import IntakeReceipt from '../components/IntakeReceipt.vue'
 import PageHeader from '../components/PageHeader.vue'
 import { authenticatedFetch } from '../services/auth'
 
@@ -360,18 +361,19 @@ onMounted(loadData)
       </div>
 
       <div class="alert alert-info">
-        Guarda el código de seguimiento para identificar
-        esta atención. Conectaremos la navegación al detalle
-        real cuando integremos el listado y detalle de órdenes.
+        Entrega el código de seguimiento al cliente. Puede consultar
+        el estado de la reparación desde la página pública.
       </div>
 
-      <button
-        type="button"
-        class="btn btn-primary"
-        @click="restart"
-      >
-        Crear otra orden
-      </button>
+      <div class="d-flex flex-wrap gap-2">
+        <IntakeReceipt :order="createdOrder" />
+        <router-link :to="`/ordenes/${createdOrder.id}`" class="btn btn-primary">
+          Ver detalle de la orden
+        </router-link>
+        <button type="button" class="btn btn-outline-secondary" @click="restart">
+          Crear otra orden
+        </button>
+      </div>
     </div>
 
     <!-- Formulario de tres pasos -->
