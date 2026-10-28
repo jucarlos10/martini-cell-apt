@@ -122,7 +122,7 @@ onBeforeUnmount(() => {
           </dl>
 
           <section class="intake-receipt-description">
-            <h2>Falla reportada</h2>
+            <h2>Falla informada por el cliente</h2>
             <p>{{ order.reported_issue }}</p>
             <h2>Observaciones al ingreso</h2>
             <p>{{ order.initial_observations || 'Sin observaciones registradas.' }}</p>
@@ -131,6 +131,7 @@ onBeforeUnmount(() => {
           <footer class="intake-receipt-footer">
             <strong>Consulta el estado de tu equipo</strong>
             <p>Ingresa el código de seguimiento en {{ consultationUrl }}</p>
+            <p>La falla informada al ingreso no constituye un diagnóstico técnico.</p>
             <small>Emitido el {{ formatDate(issuedAt) }}. Este comprobante no acredita un pago ni una autorización de reparación.</small>
           </footer>
         </article>

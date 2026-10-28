@@ -6,6 +6,7 @@ import AdminLayout from '../layouts/AdminLayout.vue'
 import IntakeReceipt from '../components/IntakeReceipt.vue'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
+import TrackingShare from '../components/TrackingShare.vue'
 import { authenticatedFetch, getCurrentUser } from '../services/auth'
 
 const route = useRoute()
@@ -3474,6 +3475,9 @@ watch(() => route.params.id, loadOrder, { immediate: true })
 
       <!-- RESUMEN: información real de la orden y sus tiempos -->
       <section v-if="tab === 'resumen'" class="row g-3">
+        <div class="col-12">
+          <TrackingShare :tracking-code="order.tracking_code" />
+        </div>
         <div class="col-lg-8">
           <div class="mc-card p-4 h-100">
             <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
@@ -3649,7 +3653,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
               </div>
 
               <div class="col-md-6">
-                <div class="mc-muted small">Falla reportada</div>
+                <div class="mc-muted small">Falla informada por el cliente</div>
                 <div>{{ order.reported_issue }}</div>
               </div>
 
@@ -3669,7 +3673,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
               </div>
 
               <div class="col-md-6">
-                <div class="mc-muted small">Diagnóstico actual</div>
+                <div class="mc-muted small">Diagnóstico técnico definitivo</div>
                 <div>{{ technicalReport?.diagnosis || (reportError || 'Pendiente') }}</div>
               </div>
 
@@ -3847,15 +3851,19 @@ watch(() => route.params.id, loadOrder, { immediate: true })
               </div>
               <div v-else class="mb-3"></div>
 
-              <label for="report-diagnosis" class="form-label">Diagnóstico definitivo</label>
+              <label for="report-diagnosis" class="form-label">Diagnóstico técnico definitivo</label>
               <textarea
                 id="report-diagnosis"
                 v-model="reportForm.diagnosis"
-                class="form-control mb-3"
+                class="form-control"
                 rows="3"
                 :disabled="reportSaving"
                 required
               ></textarea>
+              <div class="form-text mb-3">
+                Describe la causa identificada por el técnico. La falla informada
+                al ingreso y el resultado del servicio se registran por separado.
+              </div>
 
               <label for="report-actions" class="form-label">Acciones de reparación</label>
               <textarea
@@ -3886,7 +3894,8 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                 placeholder="Si no se utilizaron repuestos, deja este campo vacío."
               ></textarea>
               <div class="form-text mb-3">
-                La vinculación con catálogo y proveedores se integrará en HU-13.
+                Si utilizaste repuestos del catálogo, regístralos también en
+                Repuestos y costos para actualizar el stock y los costos de la orden.
               </div>
 
               <label for="report-result" class="form-label">Resultado del servicio</label>
@@ -3926,7 +3935,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
 
             <div v-if="technicalReport && (!canEditReport || ['DELIVERED', 'CLOSED'].includes(order.status))" class="mt-3">
               <div class="mb-2"><strong>Técnico:</strong> {{ technicalReport.technician_username }}</div>
-              <div class="mb-2"><strong>Diagnóstico:</strong> {{ technicalReport.diagnosis }}</div>
+              <div class="mb-2"><strong>Diagnóstico técnico:</strong> {{ technicalReport.diagnosis }}</div>
               <div class="mb-2"><strong>Reparación:</strong> {{ technicalReport.repair_actions }}</div>
               <div class="mb-2"><strong>Observaciones:</strong> {{ technicalReport.repair_observations || 'Sin observaciones' }}</div>
               <div class="mb-2"><strong>Repuestos:</strong> {{ technicalReport.parts_description || 'Sin repuestos descritos' }}</div>

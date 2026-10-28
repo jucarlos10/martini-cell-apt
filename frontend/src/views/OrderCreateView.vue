@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import AdminLayout from '../layouts/AdminLayout.vue'
 import IntakeReceipt from '../components/IntakeReceipt.vue'
 import PageHeader from '../components/PageHeader.vue'
+import TrackingShare from '../components/TrackingShare.vue'
 import { authenticatedFetch } from '../services/auth'
 
 const step = ref(1)
@@ -365,6 +366,8 @@ onMounted(loadData)
         el estado de la reparación desde la página pública.
       </div>
 
+      <TrackingShare :tracking-code="createdOrder.tracking_code" class="mb-3" />
+
       <div class="d-flex flex-wrap gap-2">
         <IntakeReceipt :order="createdOrder" />
         <router-link :to="`/ordenes/${createdOrder.id}`" class="btn btn-primary">
@@ -562,6 +565,10 @@ onMounted(loadData)
           placeholder="Describe el problema informado por el cliente."
           required
         ></textarea>
+        <div class="form-text mb-3">
+          Registra lo que informa el cliente. El diagnóstico técnico se documenta
+          después de revisar el equipo.
+        </div>
 
         <label
           for="initial-observations"
