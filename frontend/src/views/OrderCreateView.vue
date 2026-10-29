@@ -68,7 +68,7 @@ const selectedClient = computed(() =>
   ) || null
 )
 
-// Clientes que coinciden con el nombre o el RUT ingresado.
+// Clientes que coinciden con nombre, teléfono o RUT.
 const matchingClients = computed(() => {
   const term = clientSearch.value.trim().toLowerCase()
 
@@ -80,6 +80,7 @@ const matchingClients = computed(() => {
 
   return clients.value.filter((client) =>
     String(client.name || '').toLowerCase().includes(term) ||
+    String(client.phone || '').includes(term) ||
     (rutTerm !== '' && normalizeRut(client.rut).includes(rutTerm))
   )
 })
@@ -463,8 +464,8 @@ onMounted(loadData)
               v-model="clientSearch"
               type="search"
               class="form-control mb-2"
-              placeholder="Buscar por RUT o nombre..."
-              aria-label="Buscar cliente por RUT o nombre"
+              placeholder="Buscar por nombre, teléfono o RUT..."
+              aria-label="Buscar cliente por nombre, teléfono o RUT"
               :disabled="saving"
             >
 
@@ -484,7 +485,7 @@ onMounted(loadData)
                 :value="client.id"
               >
                 {{ client.name }} ·
-                {{ formatRut(client.rut) }}
+                {{ client.phone || formatRut(client.rut) || 'Sin teléfono' }}
               </option>
             </select>
 

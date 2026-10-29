@@ -5,7 +5,12 @@ from .validators import normalize_rut, validate_rut
 
 
 class ClientSerializer(serializers.ModelSerializer):
-    rut = serializers.CharField(max_length=20)
+    rut = serializers.CharField(
+        max_length=20,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+    )
 
     created_by_username = serializers.CharField(
         source="created_by.username",
@@ -39,7 +44,10 @@ class ClientSerializer(serializers.ModelSerializer):
         )
 
     def validate_rut(self, value):
-        rut = normalize_rut(value)
+        rut = normalize_rut(value) or None
+
+        if rut is None:
+            return None
 
         validate_rut(rut)
 

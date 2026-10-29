@@ -98,3 +98,13 @@ class IntakePriceTests(APITestCase):
         response = self.create_order()
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertIsNone(response.data["intake_price"])
+
+    def test_order_and_receipt_data_work_with_client_without_rut(self):
+        self.customer.rut = None
+        self.customer.save(update_fields=["rut"])
+
+        response = self.create_order(intake_price="35000")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["client_name"], "Cliente de ensayo")
+        self.assertEqual(response.data["client_phone"], "912345678")
+        self.assertEqual(response.data["intake_price"], "35000.00")

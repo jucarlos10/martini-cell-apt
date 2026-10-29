@@ -799,7 +799,7 @@ onMounted(() => {
 
           <div class="col-md-6">
             <label for="client-rut" class="form-label">
-              RUT
+              RUT (opcional)
             </label>
 
             <input
@@ -809,13 +809,12 @@ onMounted(() => {
               placeholder="12.345.678-5"
               maxlength="12"
               autocomplete="off"
-              required
               :disabled="saving"
               @input="onRutInput"
             >
 
             <div class="form-text">
-              Ejemplo: 12.345.678-5
+              Si lo conoces, ingrésalo para identificar al cliente. Ejemplo: 12.345.678-5
             </div>
           </div>
 
@@ -938,7 +937,7 @@ onMounted(() => {
               <strong>{{ client.name }}</strong>
 
               <div class="small">
-                RUT: {{ formatRut(client.rut) }}
+                RUT: {{ formatRut(client.rut) || 'No registrado' }}
               </div>
 
               <div class="small">
@@ -969,7 +968,7 @@ onMounted(() => {
               <h5>{{ selectedClient.name }}</h5>
 
               <div class="text-muted">
-                RUT: {{ formatRut(selectedClient.rut) }}
+                RUT: {{ formatRut(selectedClient.rut) || 'No registrado' }}
               </div>
             </div>
 

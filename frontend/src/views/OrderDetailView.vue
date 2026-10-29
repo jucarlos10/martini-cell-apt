@@ -3561,7 +3561,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                       :key="client.id"
                       :value="client.id"
                     >
-                      {{ client.name }} · {{ client.rut }}
+                      {{ client.name }} · {{ client.rut || 'Sin RUT' }}
                     </option>
                   </select>
                 </div>

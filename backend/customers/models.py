@@ -8,6 +8,8 @@ class Client(models.Model):
     rut = models.CharField(
         max_length=9,
         unique=True,
+        null=True,
+        blank=True,
         validators=[validate_rut],
     )
     name = models.CharField(max_length=150)
@@ -35,15 +37,15 @@ class Client(models.Model):
     )
 
     def clean_fields(self, exclude=None):
-        self.rut = normalize_rut(self.rut)
+        self.rut = normalize_rut(self.rut) or None
         super().clean_fields(exclude=exclude)
 
     def save(self, *args, **kwargs):
-        self.rut = normalize_rut(self.rut)
+        self.rut = normalize_rut(self.rut) or None
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.name} - {self.rut}"
+        return f"{self.name} - {self.rut}" if self.rut else self.name
 
 
 class ClientChangeHistory(models.Model):
