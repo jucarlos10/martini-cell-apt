@@ -56,6 +56,7 @@ const emptySensitiveOrderForm = () => ({
   equipment: '',
   reported_issue: '',
   initial_observations: '',
+  intake_price: '',
   change_reason: '',
 })
 const sensitiveOrderForm = ref(emptySensitiveOrderForm())
@@ -79,6 +80,17 @@ const sensitiveRelationChanged = computed(() =>
   Number(sensitiveOrderForm.value.equipment) !== Number(order.value?.equipment)
 )
 
+const sensitivePriceChanged = computed(() => {
+  const edited = String(sensitiveOrderForm.value.intake_price ?? '').trim()
+  const current = order.value?.intake_price
+  if (current === null || current === undefined || current === '') return edited !== ''
+  return edited === '' || Number(edited) !== Number(current)
+})
+
+const sensitiveReasonRequired = computed(() =>
+  sensitiveRelationChanged.value || sensitivePriceChanged.value
+)
+
 function syncSensitiveOrderForm() {
   if (!order.value) {
     sensitiveOrderForm.value = emptySensitiveOrderForm()
@@ -90,6 +102,7 @@ function syncSensitiveOrderForm() {
     equipment: order.value.equipment ?? '',
     reported_issue: order.value.reported_issue ?? '',
     initial_observations: order.value.initial_observations ?? '',
+    intake_price: order.value.intake_price ?? '',
     change_reason: '',
   }
 }
@@ -264,6 +277,7 @@ async function saveSensitiveOrder() {
   const initialObservations = String(
     sensitiveOrderForm.value.initial_observations ?? ''
   ).trim()
+  const intakePrice = String(sensitiveOrderForm.value.intake_price ?? '').trim()
   const changeReason = String(
     sensitiveOrderForm.value.change_reason ?? ''
   ).trim()
@@ -288,9 +302,14 @@ async function saveSensitiveOrder() {
     return
   }
 
-  if (sensitiveRelationChanged.value && !changeReason) {
+  if (intakePrice !== '' && !/^\d{1,10}$/.test(intakePrice)) {
+    sensitiveFormError.value = 'Ingresa un precio en pesos sin decimales o déjalo por confirmar.'
+    return
+  }
+
+  if (sensitiveReasonRequired.value && !changeReason) {
     sensitiveFormError.value =
-      'Debes indicar el motivo al cambiar el cliente o el equipo.'
+      'Debes indicar el motivo al cambiar el cliente, el equipo o el precio de ingreso.'
     return
   }
 
@@ -307,6 +326,7 @@ async function saveSensitiveOrder() {
         equipment: equipmentId,
         reported_issue: reportedIssue,
         initial_observations: initialObservations,
+        intake_price: intakePrice === '' ? null : intakePrice,
         change_reason: changeReason,
       }),
     })
@@ -3593,10 +3613,29 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                   ></textarea>
                 </div>
 
+                <div class="col-md-6">
+                  <label for="sensitive-intake-price" class="form-label">
+                    Precio informado al ingreso (CLP)
+                  </label>
+                  <input
+                    id="sensitive-intake-price"
+                    v-model="sensitiveOrderForm.intake_price"
+                    class="form-control"
+                    type="number"
+                    inputmode="numeric"
+                    min="0"
+                    max="9999999999"
+                    step="1"
+                    :disabled="sensitiveSaving"
+                    placeholder="Por confirmar"
+                  >
+                  <div class="form-text">Se conserva el cambio en el historial de la orden.</div>
+                </div>
+
                 <div class="col-12">
                   <label for="sensitive-change-reason" class="form-label">
                     Motivo del cambio
-                    <span v-if="sensitiveRelationChanged" class="text-danger">*</span>
+                    <span v-if="sensitiveReasonRequired" class="text-danger">*</span>
                   </label>
                   <textarea
                     id="sensitive-change-reason"
@@ -3604,8 +3643,8 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                     class="form-control"
                     rows="2"
                     :disabled="sensitiveSaving"
-                    :required="sensitiveRelationChanged"
-                    placeholder="Obligatorio si cambias el cliente o el equipo."
+                    :required="sensitiveReasonRequired"
+                    placeholder="Obligatorio si cambias el cliente, el equipo o el precio de ingreso."
                   ></textarea>
                   <div class="form-text">
                     Para cambios solo de falla u observaciones, el motivo es opcional.
@@ -3660,6 +3699,11 @@ watch(() => route.params.id, loadOrder, { immediate: true })
               <div class="col-md-6">
                 <div class="mc-muted small">Observaciones iniciales</div>
                 <div>{{ order.initial_observations || 'Sin observaciones adicionales' }}</div>
+              </div>
+
+              <div class="col-md-6">
+                <div class="mc-muted small">Precio informado al ingreso</div>
+                <div>{{ order.intake_price == null ? 'Por confirmar' : formatMoney(order.intake_price) }}</div>
               </div>
 
               <div class="col-md-6">

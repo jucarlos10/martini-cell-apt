@@ -24,6 +24,13 @@ function formatDate(value) {
   }).format(date)
 }
 
+function formatPrice(value) {
+  if (value === null || value === undefined || value === '') return 'Por confirmar'
+  return new Intl.NumberFormat('es-CL', {
+    style: 'currency', currency: 'CLP', maximumFractionDigits: 0,
+  }).format(Number(value))
+}
+
 async function openReceipt() {
   previousFocus = document.activeElement
   issuedAt.value = new Date()
@@ -118,7 +125,9 @@ onBeforeUnmount(() => {
             <div><dt>Orden</dt><dd>#{{ order.id }}</dd></div>
             <div><dt>Fecha de ingreso</dt><dd>{{ formatDate(order.received_at) }}</dd></div>
             <div><dt>Cliente</dt><dd>{{ order.client_name }}</dd></div>
+            <div><dt>Teléfono de contacto</dt><dd>{{ order.client_phone || 'No registrado' }}</dd></div>
             <div><dt>Equipo recibido</dt><dd>{{ order.equipment_description }}</dd></div>
+            <div><dt>Precio informado al ingreso</dt><dd>{{ formatPrice(order.intake_price) }}</dd></div>
           </dl>
 
           <section class="intake-receipt-description">
@@ -132,7 +141,7 @@ onBeforeUnmount(() => {
             <strong>Consulta el estado de tu equipo</strong>
             <p>Ingresa el código de seguimiento en {{ consultationUrl }}</p>
             <p>La falla informada al ingreso no constituye un diagnóstico técnico.</p>
-            <small>Emitido el {{ formatDate(issuedAt) }}. Este comprobante no acredita un pago ni una autorización de reparación.</small>
+            <small>Emitido el {{ formatDate(issuedAt) }}. El precio informado al ingreso puede cambiar tras la revisión técnica. Este comprobante no acredita un pago ni una autorización de reparación.</small>
           </footer>
         </article>
       </div>

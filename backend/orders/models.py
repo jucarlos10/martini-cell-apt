@@ -50,6 +50,17 @@ class ServiceOrder(models.Model):
         blank=True,
     )
 
+    # Valor comunicado al recibir el equipo. Es una referencia de ingreso,
+    # distinta del precio cobrado que se registra después en OrderFinancial.
+    intake_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        default=None,
+        validators=[MinValueValidator(Decimal("0.00"))],
+    )
+
     status = models.CharField(
         max_length=20,
         choices=Status.choices,
@@ -71,6 +82,17 @@ class ServiceOrder(models.Model):
         blank=True,
         related_name="service_orders_created",
     )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(intake_price__isnull=True)
+                    | models.Q(intake_price__gte=0)
+                ),
+                name="order_intake_price_nonnegative",
+            ),
+        ]
 
     def clean(self):
         super().clean()
@@ -859,6 +881,7 @@ class OrderSensitiveChangeHistory(models.Model):
             "INITIAL_OBSERVATIONS",
             "Observaciones iniciales",
         )
+        INTAKE_PRICE = "INTAKE_PRICE", "Precio informado al ingreso"
 
     order = models.ForeignKey(
         ServiceOrder,

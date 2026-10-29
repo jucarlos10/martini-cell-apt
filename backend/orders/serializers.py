@@ -26,6 +26,11 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
         read_only=True,
     )
 
+    client_phone = serializers.CharField(
+        source="client.phone",
+        read_only=True,
+    )
+
     equipment_description = serializers.SerializerMethodField()
 
     created_by_username = serializers.CharField(
@@ -54,10 +59,12 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
             "tracking_code",
             "client",
             "client_name",
+            "client_phone",
             "equipment",
             "equipment_description",
             "reported_issue",
             "initial_observations",
+            "intake_price",
             "status",
             "status_display",
             "received_at",
@@ -70,6 +77,7 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
             "id",
             "tracking_code",
             "client_name",
+            "client_phone",
             "equipment_description",
             "status",
             "status_display",
@@ -119,6 +127,12 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
         ):
             changes.append("initial_observations")
 
+        if (
+            "intake_price" in attrs
+            and attrs["intake_price"] != instance.intake_price
+        ):
+            changes.append("intake_price")
+
         return changes
 
     def _snapshot_value(self, field_name, value):
@@ -140,6 +154,9 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
                     f"{value.brand} {value.model}"
                 ).strip(),
             }
+
+        if field_name == "intake_price":
+            return str(value) if value is not None else None
 
         return value
 
@@ -192,14 +209,14 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
                 )
 
             if (
-                {"client", "equipment"} & set(changes)
+                {"client", "equipment", "intake_price"} & set(changes)
                 and not attrs.get("change_reason", "").strip()
             ):
                 raise serializers.ValidationError(
                     {
                         "change_reason": (
                             "Debes indicar el motivo al cambiar "
-                            "el cliente o el equipo de la orden."
+                            "el cliente, el equipo o el precio de ingreso."
                         )
                     }
                 )
@@ -262,14 +279,14 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
             )
 
         if (
-            {"client", "equipment"} & set(changes)
+            {"client", "equipment", "intake_price"} & set(changes)
             and not change_reason
         ):
             raise serializers.ValidationError(
                 {
                     "change_reason": (
                         "Debes indicar el motivo al cambiar "
-                        "el cliente o el equipo de la orden."
+                        "el cliente, el equipo o el precio de ingreso."
                     )
                 }
             )

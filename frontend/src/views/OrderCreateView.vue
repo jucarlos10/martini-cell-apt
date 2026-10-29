@@ -24,7 +24,19 @@ const clientSearch = ref('')
 const order = ref({
   reported_issue: '',
   initial_observations: '',
+  intake_price: '',
 })
+
+const validIntakePrice = (value) => value === '' || /^\d{1,10}$/.test(value)
+
+function formatIntakePrice(value) {
+  if (value === '') return 'Por confirmar'
+  return new Intl.NumberFormat('es-CL', {
+    style: 'currency',
+    currency: 'CLP',
+    maximumFractionDigits: 0,
+  }).format(Number(value))
+}
 
 // Normalizar el RUT para buscar con o sin puntos y guion.
 function normalizeRut(value) {
@@ -197,6 +209,10 @@ function next() {
         'Describe la falla o síntoma reportado.'
       return
     }
+    if (!validIntakePrice(String(order.value.intake_price ?? '').trim())) {
+      error.value = 'Ingresa un precio en pesos sin decimales o déjalo por confirmar.'
+      return
+    }
   }
 
   if (step.value < 3) {
@@ -231,6 +247,13 @@ async function save() {
     return
   }
 
+  const intakePrice = String(order.value.intake_price ?? '').trim()
+  if (!validIntakePrice(intakePrice)) {
+    error.value = 'Ingresa un precio en pesos sin decimales o déjalo por confirmar.'
+    step.value = 2
+    return
+  }
+
   saving.value = true
 
   try {
@@ -245,6 +268,7 @@ async function save() {
         reported_issue: order.value.reported_issue.trim(),
         initial_observations:
           order.value.initial_observations.trim(),
+        intake_price: intakePrice === '' ? null : intakePrice,
       }),
     })
 
@@ -277,6 +301,7 @@ function restart() {
   order.value = {
     reported_issue: '',
     initial_observations: '',
+    intake_price: '',
   }
 
   error.value = ''
@@ -585,6 +610,25 @@ onMounted(loadData)
           placeholder="Estado de recepción, accesorios entregados u otras observaciones."
         ></textarea>
 
+        <label for="intake-price" class="form-label">
+          Precio informado al ingreso (CLP)
+        </label>
+        <input
+          id="intake-price"
+          v-model="order.intake_price"
+          class="form-control mb-2"
+          type="number"
+          inputmode="numeric"
+          min="0"
+          max="9999999999"
+          step="1"
+          placeholder="Por ejemplo 35000"
+        >
+        <div class="form-text mb-3">
+          Si aún no hay precio, déjalo vacío. Es el valor informado en la recepción,
+          distinto del cobro final que se confirma después.
+        </div>
+
         <div class="form-text">
           Django registrará automáticamente la fecha,
           hora y usuario que crea la orden.
@@ -650,6 +694,10 @@ onMounted(loadData)
                   'Sin observaciones adicionales'
                 }}
               </div>
+
+              <hr>
+              <div class="small text-muted">Precio informado al ingreso</div>
+              <strong>{{ formatIntakePrice(order.intake_price) }}</strong>
             </div>
           </div>
         </div>
