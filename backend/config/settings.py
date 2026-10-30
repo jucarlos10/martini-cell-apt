@@ -191,6 +191,53 @@ else:
     }
 
 
+# WhatsApp Cloud API (Meta)
+#
+# La integración permanece desactivada por defecto. Para habilitarla se deben
+# definir las credenciales únicamente mediante variables de entorno; nunca
+# almacenar access tokens ni otros secretos en el repositorio.
+WHATSAPP_CLOUD_API_ENABLED = _enabled("WHATSAPP_CLOUD_API_ENABLED")
+WHATSAPP_CLOUD_API_BASE_URL = os.getenv(
+    "WHATSAPP_CLOUD_API_BASE_URL",
+    "https://graph.facebook.com",
+).strip().rstrip("/")
+WHATSAPP_CLOUD_API_VERSION = os.getenv("WHATSAPP_CLOUD_API_VERSION", "").strip()
+WHATSAPP_CLOUD_PHONE_NUMBER_ID = os.getenv(
+    "WHATSAPP_CLOUD_PHONE_NUMBER_ID",
+    "",
+).strip()
+WHATSAPP_CLOUD_ACCESS_TOKEN = os.getenv(
+    "WHATSAPP_CLOUD_ACCESS_TOKEN",
+    "",
+).strip()
+WHATSAPP_CLOUD_TIMEOUT = int(os.getenv("WHATSAPP_CLOUD_TIMEOUT", "10"))
+
+# Idioma y plantillas aprobadas en WhatsApp Manager. Los nombres reales se
+# configuran en el entorno porque pueden variar entre desarrollo y producción.
+WHATSAPP_TEMPLATE_LANGUAGE = os.getenv(
+    "WHATSAPP_TEMPLATE_LANGUAGE",
+    "es_CL",
+).strip() or "es_CL"
+WHATSAPP_TEMPLATE_RECEPTION = os.getenv(
+    "WHATSAPP_TEMPLATE_RECEPTION",
+    "",
+).strip()
+WHATSAPP_TEMPLATE_CHAT_REPLY = os.getenv(
+    "WHATSAPP_TEMPLATE_CHAT_REPLY",
+    "",
+).strip()
+WHATSAPP_TEMPLATE_STATUS_CHANGE = os.getenv(
+    "WHATSAPP_TEMPLATE_STATUS_CHANGE",
+    "",
+).strip()
+
+# Mientras se completa y valida la integración real, se puede conservar el
+# comportamiento manual/semi-manual existente mediante wa.me como respaldo.
+WHATSAPP_CLOUD_FALLBACK_TO_WA_ME = _enabled(
+    "WHATSAPP_CLOUD_FALLBACK_TO_WA_ME"
+)
+
+
 AUTH_USER_MODEL = "accounts.User"
 
 REST_FRAMEWORK = {

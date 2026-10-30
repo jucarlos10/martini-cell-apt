@@ -55,6 +55,10 @@ from .serializers import (
     ServiceOrderSerializer,
 )
 from .services import calculate_order_times
+from .whatsapp_cloud import (
+    WhatsAppCloudError,
+    send_template_message,
+)
 
 
 # Transiciones permitidas para la primera versión de HU-10.
@@ -617,6 +621,140 @@ class OrderReceptionReceiptDeliveryView(APIView):
             f"https://wa.me/{destination}?text={quote(message)}"
         )
 
+        cloud_api_enabled = bool(
+            getattr(
+                settings,
+                "WHATSAPP_CLOUD_API_ENABLED",
+                False,
+            )
+        )
+        cloud_api_error = ""
+
+        if cloud_api_enabled:
+            template_name = (
+                getattr(
+                    settings,
+                    "WHATSAPP_TEMPLATE_RECEPTION",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            try:
+                send_result = send_template_message(
+                    to=destination,
+                    template_name=template_name,
+                    body_parameters=[
+                        order.tracking_code,
+                    ],
+                    language_code=getattr(
+                        settings,
+                        "WHATSAPP_TEMPLATE_LANGUAGE",
+                        "es_CL",
+                    ),
+                )
+            except WhatsAppCloudError as error:
+                cloud_api_error = str(error)[:700]
+
+                if not bool(
+                    getattr(
+                        settings,
+                        "WHATSAPP_CLOUD_FALLBACK_TO_WA_ME",
+                        False,
+                    )
+                ):
+                    delivery = (
+                        OrderReceptionReceiptDelivery.objects.create(
+                            receipt=receipt,
+                            delivery_method=(
+                                OrderReceptionReceiptDelivery
+                                .DeliveryMethod.WHATSAPP
+                            ),
+                            status=(
+                                OrderReceptionReceiptDelivery
+                                .DeliveryStatus.FAILED
+                            ),
+                            destination=destination,
+                            detail=(
+                                "El comprobante está generado, pero no fue "
+                                "posible enviarlo mediante WhatsApp Cloud API. "
+                                f"{cloud_api_error}"
+                            )[:1000],
+                            delivered_by=user,
+                        )
+                    )
+
+                    return Response(
+                        {
+                            "detail": (
+                                "El comprobante está generado, pero no fue "
+                                "posible enviarlo por WhatsApp."
+                            ),
+                            "preferred_notification_channel": (
+                                order.preferred_notification_channel
+                            ),
+                            "receipt": OrderReceptionReceiptSerializer(
+                                receipt
+                            ).data,
+                            "delivery": {
+                                "id": delivery.id,
+                                "status": delivery.status,
+                                "destination": delivery.destination,
+                            },
+                        },
+                        status=status.HTTP_502_BAD_GATEWAY,
+                    )
+            else:
+                delivery = OrderReceptionReceiptDelivery.objects.create(
+                    receipt=receipt,
+                    delivery_method=(
+                        OrderReceptionReceiptDelivery.DeliveryMethod.WHATSAPP
+                    ),
+                    status=(
+                        OrderReceptionReceiptDelivery.DeliveryStatus.SENT
+                    ),
+                    destination=send_result.destination,
+                    detail=(
+                        "Comprobante enviado mediante WhatsApp Cloud API. "
+                        f"ID de Meta: {send_result.message_id}."
+                    )[:1000],
+                    delivered_by=user,
+                )
+
+                return Response(
+                    {
+                        "detail": (
+                            "Comprobante enviado mediante WhatsApp Cloud API."
+                        ),
+                        "preferred_notification_channel": (
+                            order.preferred_notification_channel
+                        ),
+                        "whatsapp_url": "",
+                        "message": "",
+                        "receipt": OrderReceptionReceiptSerializer(
+                            receipt
+                        ).data,
+                        "delivery": {
+                            "id": delivery.id,
+                            "status": delivery.status,
+                            "destination": delivery.destination,
+                        },
+                    },
+                    status=status.HTTP_201_CREATED,
+                )
+
+        if cloud_api_error:
+            detail = (
+                "WhatsApp Cloud API no pudo completar el envío. "
+                "Se preparó el respaldo manual mediante wa.me. "
+                f"{cloud_api_error}"
+            )[:1000]
+        else:
+            detail = (
+                "Mensaje de WhatsApp preparado para envío manual. "
+                "WhatsApp Cloud API aún no está habilitada."
+            )
+
         delivery = OrderReceptionReceiptDelivery.objects.create(
             receipt=receipt,
             delivery_method=(
@@ -626,10 +764,7 @@ class OrderReceptionReceiptDeliveryView(APIView):
                 OrderReceptionReceiptDelivery.DeliveryStatus.PREPARED
             ),
             destination=destination,
-            detail=(
-                "Mensaje de WhatsApp preparado para envío manual. "
-                "La automatización mediante Cloud API queda como mejora."
-            ),
+            detail=detail,
             delivered_by=user,
         )
 
@@ -652,6 +787,7 @@ class OrderReceptionReceiptDeliveryView(APIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
 
     def _register_print(self, order, receipt, user):
         if order.client.email:
@@ -874,11 +1010,90 @@ def _notify_chat_reply(message, user):
             )
             return _serialize_chat_notification(notification)
 
+        cloud_api_enabled = bool(
+            getattr(
+                settings,
+                "WHATSAPP_CLOUD_API_ENABLED",
+                False,
+            )
+        )
+        cloud_api_error = ""
+
+        if cloud_api_enabled:
+            template_name = (
+                getattr(
+                    settings,
+                    "WHATSAPP_TEMPLATE_CHAT_REPLY",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            try:
+                send_result = send_template_message(
+                    to=destination,
+                    template_name=template_name,
+                    body_parameters=[
+                        order.tracking_code,
+                    ],
+                    language_code=getattr(
+                        settings,
+                        "WHATSAPP_TEMPLATE_LANGUAGE",
+                        "es_CL",
+                    ),
+                )
+            except WhatsAppCloudError as error:
+                cloud_api_error = str(error)[:700]
+
+                if not bool(
+                    getattr(
+                        settings,
+                        "WHATSAPP_CLOUD_FALLBACK_TO_WA_ME",
+                        False,
+                    )
+                ):
+                    notification = OrderChatNotification.objects.create(
+                        **common_values,
+                        status=OrderChatNotification.Status.FAILED,
+                        destination=destination,
+                        detail=(
+                            "La respuesta del chat fue guardada, pero no fue "
+                            "posible enviar el aviso mediante WhatsApp "
+                            f"Cloud API. {cloud_api_error}"
+                        )[:1000],
+                    )
+                    return _serialize_chat_notification(notification)
+            else:
+                notification = OrderChatNotification.objects.create(
+                    **common_values,
+                    status=OrderChatNotification.Status.SENT,
+                    destination=send_result.destination,
+                    detail=(
+                        "Aviso de nueva respuesta enviado mediante "
+                        "WhatsApp Cloud API. "
+                        f"ID de Meta: {send_result.message_id}."
+                    )[:1000],
+                )
+                return _serialize_chat_notification(notification)
+
         prepared_message = _chat_notification_text(order)
         action_url = (
             f"https://wa.me/{destination}"
             f"?text={quote(prepared_message)}"
         )
+
+        if cloud_api_error:
+            detail = (
+                "WhatsApp Cloud API no pudo completar el envío. "
+                "Se preparó el respaldo manual mediante wa.me. "
+                f"{cloud_api_error}"
+            )[:1000]
+        else:
+            detail = (
+                "Aviso de WhatsApp preparado para envío manual. "
+                "WhatsApp Cloud API aún no está habilitada. "
+                "La respuesta del chat ya quedó guardada."
+            )
 
         notification = OrderChatNotification.objects.create(
             **common_values,
@@ -886,10 +1101,7 @@ def _notify_chat_reply(message, user):
             destination=destination,
             prepared_message=prepared_message,
             action_url=action_url,
-            detail=(
-                "Aviso de WhatsApp preparado para envío manual. "
-                "La respuesta del chat ya quedó guardada."
-            ),
+            detail=detail,
         )
         return _serialize_chat_notification(notification)
 
@@ -1557,6 +1769,83 @@ def _notify_status_change(status_history, user):
             )
             return _serialize_status_notification(notification)
 
+        cloud_api_enabled = bool(
+            getattr(
+                settings,
+                "WHATSAPP_CLOUD_API_ENABLED",
+                False,
+            )
+        )
+        cloud_api_error = ""
+
+        if cloud_api_enabled:
+            template_name = (
+                getattr(
+                    settings,
+                    "WHATSAPP_TEMPLATE_STATUS_CHANGE",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            new_status_display = ServiceOrder.Status(
+                status_history.to_status
+            ).label
+
+            try:
+                send_result = send_template_message(
+                    to=destination,
+                    template_name=template_name,
+                    body_parameters=[
+                        order.tracking_code,
+                        new_status_display,
+                    ],
+                    language_code=getattr(
+                        settings,
+                        "WHATSAPP_TEMPLATE_LANGUAGE",
+                        "es_CL",
+                    ),
+                )
+            except WhatsAppCloudError as error:
+                cloud_api_error = str(error)[:700]
+
+                if not bool(
+                    getattr(
+                        settings,
+                        "WHATSAPP_CLOUD_FALLBACK_TO_WA_ME",
+                        False,
+                    )
+                ):
+                    notification = (
+                        OrderStatusNotification.objects.create(
+                            **common_values,
+                            status=(
+                                OrderStatusNotification.Status.FAILED
+                            ),
+                            destination=destination,
+                            detail=(
+                                "El estado fue actualizado, pero no fue "
+                                "posible enviar el aviso mediante WhatsApp "
+                                f"Cloud API. {cloud_api_error}"
+                            )[:1000],
+                        )
+                    )
+                    return _serialize_status_notification(
+                        notification
+                    )
+            else:
+                notification = OrderStatusNotification.objects.create(
+                    **common_values,
+                    status=OrderStatusNotification.Status.SENT,
+                    destination=send_result.destination,
+                    detail=(
+                        "Aviso de cambio de estado enviado mediante "
+                        "WhatsApp Cloud API. "
+                        f"ID de Meta: {send_result.message_id}."
+                    )[:1000],
+                )
+                return _serialize_status_notification(notification)
+
         prepared_message = _status_notification_text(
             order,
             status_history,
@@ -1566,16 +1855,26 @@ def _notify_status_change(status_history, user):
             f"?text={quote(prepared_message)}"
         )
 
+        if cloud_api_error:
+            detail = (
+                "WhatsApp Cloud API no pudo completar el envío. "
+                "Se preparó el respaldo manual mediante wa.me. "
+                f"{cloud_api_error}"
+            )[:1000]
+        else:
+            detail = (
+                "Aviso de WhatsApp preparado para envío manual. "
+                "WhatsApp Cloud API aún no está habilitada. "
+                "El cambio de estado ya quedó guardado."
+            )
+
         notification = OrderStatusNotification.objects.create(
             **common_values,
             status=OrderStatusNotification.Status.PREPARED,
             destination=destination,
             prepared_message=prepared_message,
             action_url=action_url,
-            detail=(
-                "Aviso de WhatsApp preparado para envío manual. "
-                "El cambio de estado ya quedó guardado."
-            ),
+            detail=detail,
         )
         return _serialize_status_notification(notification)
 
