@@ -2,7 +2,7 @@ name: Pruebas del backend
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'feature/**']
   push:
     branches: [main]
 

@@ -3,7 +3,7 @@ from django.db.models import Q
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.shortcuts import get_object_or_404
 
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.generics import (
     ListAPIView,
     ListCreateAPIView,
@@ -11,14 +11,20 @@ from rest_framework.generics import (
 )
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from accounts.permissions import (
     CanManageOperationalRecord,
+    IsAdminRole,
     IsAdminOrTechRole,
 )
 
-from .models import Client, ClientChangeHistory
-from .serializers import ClientChangeHistorySerializer, ClientSerializer
+from .loyalty import loyalty_summary, with_loyalty_counts
+from .models import Client, ClientChangeHistory, ClientLoyaltyReview
+from .serializers import (
+    ClientChangeHistorySerializer, ClientLoyaltyReviewSerializer,
+    ClientSerializer,
+)
 from .validators import normalize_rut
 
 
@@ -30,7 +36,7 @@ class ClientListCreateView(ListCreateAPIView):
     ]
 
     def get_queryset(self):
-        queryset = Client.objects.all().order_by("name")
+        queryset = with_loyalty_counts().order_by("name")
         search = self.request.query_params.get("search", "").strip()
 
         if not search:
@@ -57,7 +63,7 @@ class ClientListCreateView(ListCreateAPIView):
 
 
 class ClientDetailView(RetrieveUpdateDestroyAPIView):
-    queryset = Client.objects.all()
+    queryset = with_loyalty_counts()
     serializer_class = ClientSerializer
     permission_classes = [
         IsAuthenticated,
@@ -113,7 +119,7 @@ class ClientDetailView(RetrieveUpdateDestroyAPIView):
     @transaction.atomic
     def destroy(self, request, *args, **kwargs):
         client = get_object_or_404(
-            self.get_queryset().select_for_update(),
+            Client.objects.select_for_update(),
             pk=kwargs["pk"],
         )
         self.check_object_permissions(request, client)
@@ -182,3 +188,61 @@ class ClientChangeHistoryListView(ListAPIView):
         return ClientChangeHistory.objects.filter(
             client_id=self.kwargs["pk"]
         ).order_by("-changed_at")
+
+
+class ClientLoyaltyAlertsView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminRole]
+
+    def get(self, request):
+        clients = with_loyalty_counts(
+            Client.objects.filter(rut__isnull=False, is_active=True)
+        ).filter(loyalty_order_count__gte=6).order_by("name")
+
+        return Response(
+            ClientSerializer(
+                [client for client in clients if loyalty_summary(client)[
+                    "loyalty_pending_milestone"
+                ]], many=True
+            ).data
+        )
+
+
+class LoyaltyBenefitSerializer(serializers.Serializer):
+    benefit_applied = serializers.CharField(
+        max_length=1000, trim_whitespace=True
+    )
+
+
+class ClientLoyaltyReviewView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminRole]
+
+    def get(self, request, pk):
+        client = get_object_or_404(Client, pk=pk)
+        reviews = client.loyalty_reviews.select_related("reviewed_by")
+        return Response(ClientLoyaltyReviewSerializer(reviews, many=True).data)
+
+    @transaction.atomic
+    def post(self, request, pk):
+        form = LoyaltyBenefitSerializer(data=request.data)
+        form.is_valid(raise_exception=True)
+
+        client = get_object_or_404(Client.objects.select_for_update(), pk=pk)
+        summary = loyalty_summary(client)
+        pending = summary["loyalty_pending_milestone"]
+        if pending is None:
+            return Response(
+                {"detail": "No hay un hito pendiente para este cliente."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        review = ClientLoyaltyReview.objects.create(
+            client=client,
+            milestone=pending,
+            cycle_target=summary["loyalty_cycle_target"],
+            benefit_applied=form.validated_data["benefit_applied"],
+            reviewed_by=request.user,
+        )
+        return Response(
+            ClientLoyaltyReviewSerializer(review).data,
+            status=status.HTTP_201_CREATED,
+        )

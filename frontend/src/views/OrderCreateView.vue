@@ -13,6 +13,7 @@ const saving = ref(false)
 
 const error = ref('')
 const createdOrder = ref(null)
+const createdClientLoyalty = ref(null)
 
 const clients = ref([])
 const devices = ref([])
@@ -281,6 +282,15 @@ async function save() {
 
     // Django devuelve el ID y el código único de seguimiento.
     createdOrder.value = await response.json()
+    createdClientLoyalty.value = null
+    try {
+      const clientResponse = await authenticatedFetch(
+        `/api/clients/${createdOrder.value.client}/`
+      )
+      if (clientResponse.ok) createdClientLoyalty.value = await clientResponse.json()
+    } catch {
+      // La orden ya fue creada: la consulta del aviso no altera el resultado.
+    }
 
   } catch (err) {
     error.value =
@@ -293,6 +303,7 @@ async function save() {
 
 function restart() {
   createdOrder.value = null
+  createdClientLoyalty.value = null
 
   step.value = 1
   clientId.value = ''
@@ -390,6 +401,14 @@ onMounted(loadData)
       <div class="alert alert-info">
         Entrega el código de seguimiento al cliente. Puede consultar
         el estado de la reparación desde la página pública.
+      </div>
+
+      <div v-if="createdClientLoyalty?.loyalty_pending_milestone" class="alert alert-warning" role="status">
+        El cliente alcanzó un ciclo de {{ createdClientLoyalty.loyalty_cycle_target }} ingresos.
+        Hay un beneficio de prueba pendiente de revisión.
+        <router-link :to="`/clientes?cliente=${createdClientLoyalty.id}`">
+          Ver ficha del cliente
+        </router-link>
       </div>
 
       <TrackingShare :tracking-code="createdOrder.tracking_code" class="mb-3" />

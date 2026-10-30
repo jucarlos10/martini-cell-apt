@@ -2,7 +2,7 @@ name: Compilación del frontend
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'feature/**']
   push:
     branches: [main]
 

@@ -4,11 +4,30 @@ import { computed, onMounted, ref } from 'vue'
 import AdminLayout from '../layouts/AdminLayout.vue'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
-import { authenticatedFetch } from '../services/auth'
+import { authenticatedFetch, getCurrentUser } from '../services/auth'
 
 const orders = ref([])
 const loading = ref(true)
 const error = ref('')
+const loyaltyAlerts = ref([])
+const loyaltyError = ref('')
+const loyaltyLoading = ref(false)
+const isAdmin = getCurrentUser()?.role === 'ADMIN'
+
+async function loadLoyaltyAlerts() {
+  if (!isAdmin) return
+  loyaltyLoading.value = true
+  loyaltyError.value = ''
+  try {
+    const response = await authenticatedFetch('/api/clients/loyalty/alerts/')
+    if (!response.ok) throw new Error('No fue posible cargar los avisos de beneficios.')
+    loyaltyAlerts.value = await response.json()
+  } catch (err) {
+    loyaltyError.value = err.message
+  } finally {
+    loyaltyLoading.value = false
+  }
+}
 
 const open = computed(() =>
   orders.value.filter(
@@ -115,7 +134,10 @@ async function loadOrders() {
   }
 }
 
-onMounted(loadOrders)
+onMounted(() => {
+  loadOrders()
+  loadLoyaltyAlerts()
+})
 </script>
 
 <template>
@@ -137,6 +159,35 @@ onMounted(loadOrders)
         </router-link>
       </template>
     </PageHeader>
+
+    <div v-if="isAdmin" class="mc-card p-3 mb-4">
+      <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
+        <h5 class="mb-0">Beneficios por ingresos</h5>
+        <div class="d-flex flex-wrap gap-2">
+          <router-link to="/demo-beneficios" class="btn btn-sm btn-outline-secondary">
+            Probar simulador
+          </router-link>
+          <button type="button" class="btn btn-sm btn-outline-primary" @click="loadLoyaltyAlerts">
+            Actualizar avisos
+          </button>
+        </div>
+      </div>
+      <div v-if="loyaltyLoading" class="text-muted">Consultando avisos...</div>
+      <div v-else-if="loyaltyError" class="alert alert-danger mb-0" role="alert">{{ loyaltyError }}</div>
+      <div v-else-if="!loyaltyAlerts.length" class="text-muted">No hay beneficios pendientes de revisión.</div>
+      <div v-else>
+        <div v-for="client in loyaltyAlerts" :key="client.id" class="border-top py-2">
+          <router-link :to="`/clientes?cliente=${client.id}`" class="fw-semibold">
+            {{ client.name }}
+          </router-link>
+          · Ciclo {{ client.loyalty_cycle_visits }} / {{ client.loyalty_cycle_target }} ·
+          Beneficio pendiente
+        </div>
+      </div>
+      <div class="small text-muted mt-2">
+        Prototipo de prueba: el aviso permanece hasta registrar el beneficio simulado.
+      </div>
+    </div>
 
     <div
       v-if="error"
