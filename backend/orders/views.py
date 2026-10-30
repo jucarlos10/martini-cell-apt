@@ -1,5 +1,10 @@
 import mimetypes
+import re
+from decimal import Decimal, InvalidOperation
+from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
+from django.core.mail import EmailMessage
 from django.db import transaction
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
@@ -20,6 +25,8 @@ from accounts.permissions import (
 
 from .models import (
     OrderEvidence,
+    OrderReceptionReceipt,
+    OrderReceptionReceiptDelivery,
     OrderSensitiveChangeHistory,
     OrderStatusHistory,
     OrderTechnicalReport,
@@ -27,6 +34,8 @@ from .models import (
 )
 from .serializers import (
     OrderEvidenceSerializer,
+    OrderReceptionReceiptDeliveryRequestSerializer,
+    OrderReceptionReceiptSerializer,
     OrderSensitiveChangeHistorySerializer,
     OrderTechnicalReportHistorySerializer,
     OrderTechnicalReportSerializer,
@@ -176,6 +185,511 @@ class ServiceOrderDetailView(RetrieveUpdateAPIView):
         IsAuthenticated,
         CanManageOperationalRecord,
     ]
+
+
+# HU-34: generación y entrega del comprobante de recepción.
+def _masked_identifier(value):
+    if not value:
+        return ""
+
+    value = str(value).strip()
+
+    if len(value) <= 4:
+        return value
+
+    return f"{'*' * (len(value) - 4)}{value[-4:]}"
+
+
+def _build_reception_receipt_snapshot(order):
+    equipment = order.equipment
+    client = order.client
+
+    identifier_label = ""
+    identifier_value = ""
+
+    if equipment.imei:
+        identifier_label = "IMEI"
+        identifier_value = _masked_identifier(equipment.imei)
+    elif equipment.serial_number:
+        identifier_label = "Número de serie"
+        identifier_value = _masked_identifier(equipment.serial_number)
+
+    received_by = ""
+
+    if order.created_by_id:
+        received_by = order.created_by.username
+
+    return {
+        "business": {
+            "name": "Martini Cell",
+        },
+        "order": {
+            "id": order.id,
+            "tracking_code": order.tracking_code,
+            "received_at": order.received_at.isoformat(),
+            "status": order.status,
+            "status_display": order.get_status_display(),
+        },
+        "client": {
+            "name": client.name,
+            "phone": client.phone,
+            "email": client.email,
+        },
+        "equipment": {
+            "type": equipment.equipment_type,
+            "type_display": equipment.get_equipment_type_display(),
+            "brand": equipment.brand,
+            "model": equipment.model,
+            "color": equipment.color,
+            "identifier_label": identifier_label,
+            "identifier": identifier_value,
+        },
+        "reception": {
+            "reported_issue": order.reported_issue,
+            "initial_observations": order.initial_observations,
+            "received_accessories": order.received_accessories,
+            "deposit_amount": str(order.deposit_amount),
+            "received_by": received_by,
+            "confirmation": (
+                "Martini Cell confirma la recepción del equipo "
+                "descrito en este comprobante."
+            ),
+        },
+        "tracking": {
+            "instructions": (
+                "Conserva este código. Es el mismo código de la orden "
+                "y se utiliza para consultar el estado de la reparación."
+            ),
+        },
+    }
+
+
+def _get_or_create_reception_receipt(order, user):
+    receipt, created = OrderReceptionReceipt.objects.get_or_create(
+        order=order,
+        defaults={
+            "snapshot": _build_reception_receipt_snapshot(order),
+            "generated_by": user,
+        },
+    )
+
+    return receipt, created
+
+
+def _format_clp(value):
+    """Formatea un monto en pesos chilenos, sin decimales."""
+    try:
+        amount = Decimal(str(value or "0"))
+    except (InvalidOperation, TypeError, ValueError):
+        amount = Decimal("0")
+
+    return f"${amount:,.0f}".replace(",", ".")
+
+
+def _receipt_email_body(receipt):
+    snapshot = receipt.snapshot
+    order_data = snapshot.get("order", {})
+    client_data = snapshot.get("client", {})
+    equipment_data = snapshot.get("equipment", {})
+    reception_data = snapshot.get("reception", {})
+
+    received_at = order_data.get("received_at", "")
+    formatted_received_at = received_at
+
+    if receipt.order.received_at:
+        chile_time = receipt.order.received_at.astimezone(
+            ZoneInfo("America/Santiago")
+        )
+        formatted_received_at = chile_time.strftime(
+            "%d-%m-%Y %H:%M"
+        )
+
+    identifier = ""
+    if equipment_data.get("identifier"):
+        identifier = (
+            f"{equipment_data.get('identifier_label', 'Identificador')}: "
+            f"{equipment_data['identifier']}\n"
+        )
+
+    accessories = reception_data.get("received_accessories") or "Sin accesorios informados"
+    observations = reception_data.get("initial_observations") or "Sin observaciones iniciales"
+
+    return (
+        "MARTINI CELL - COMPROBANTE DE RECEPCIÓN\n\n"
+        f"Orden: {order_data.get('tracking_code', '')}\n"
+        f"Fecha y hora de recepción: {formatted_received_at}\n\n"
+        f"Cliente: {client_data.get('name', '')}\n"
+        f"Teléfono: {client_data.get('phone', '')}\n"
+        f"Correo: {client_data.get('email', '') or 'No registrado'}\n\n"
+        f"Equipo: {equipment_data.get('type_display', '')}\n"
+        f"Marca / modelo: {equipment_data.get('brand', '')} "
+        f"{equipment_data.get('model', '')}\n"
+        f"{identifier}"
+        f"Falla informada: {reception_data.get('reported_issue', '')}\n"
+        f"Condición / observaciones iniciales: {observations}\n"
+        f"Accesorios recibidos: {accessories}\n"
+        f"Abono recibido: {_format_clp(reception_data.get('deposit_amount'))}\n"
+        f"Recibido por: {reception_data.get('received_by', '')}\n\n"
+        f"{reception_data.get('confirmation', '')}\n\n"
+        "Conserva el código de la orden para consultar posteriormente "
+        "el estado de la reparación.\n"
+    )
+
+
+def _whatsapp_number(phone):
+    digits = re.sub(r"\D", "", phone or "")
+
+    # Los celulares chilenos suelen almacenarse como 9XXXXXXXX.
+    # Para wa.me se utiliza el código de país sin el signo +.
+    if len(digits) == 9 and digits.startswith("9"):
+        digits = f"56{digits}"
+
+    return digits
+
+
+class OrderReceptionReceiptView(APIView):
+    permission_classes = [
+        IsAuthenticated,
+        IsAdminOrTechRole,
+    ]
+
+    def get_order(self, pk):
+        return get_object_or_404(
+            ServiceOrder.objects.select_related(
+                "client",
+                "equipment",
+                "created_by",
+            ),
+            pk=pk,
+        )
+
+    def get(self, request, pk):
+        order = self.get_order(pk)
+
+        receipt = get_object_or_404(
+            OrderReceptionReceipt.objects
+            .select_related(
+                "order",
+                "generated_by",
+            )
+            .prefetch_related("deliveries"),
+            order=order,
+        )
+
+        return Response(
+            OrderReceptionReceiptSerializer(receipt).data
+        )
+
+    @transaction.atomic
+    def post(self, request, pk):
+        order = self.get_order(pk)
+
+        receipt, created = _get_or_create_reception_receipt(
+            order,
+            request.user,
+        )
+
+        receipt = (
+            OrderReceptionReceipt.objects
+            .select_related(
+                "order",
+                "generated_by",
+            )
+            .prefetch_related("deliveries")
+            .get(pk=receipt.pk)
+        )
+
+        return Response(
+            OrderReceptionReceiptSerializer(receipt).data,
+            status=(
+                status.HTTP_201_CREATED
+                if created
+                else status.HTTP_200_OK
+            ),
+        )
+
+
+class OrderReceptionReceiptDeliveryView(APIView):
+    permission_classes = [
+        IsAuthenticated,
+        IsAdminOrTechRole,
+    ]
+
+    def get_order(self, pk):
+        return get_object_or_404(
+            ServiceOrder.objects.select_related(
+                "client",
+                "equipment",
+                "created_by",
+            ),
+            pk=pk,
+        )
+
+    def post(self, request, pk):
+        request_serializer = (
+            OrderReceptionReceiptDeliveryRequestSerializer(
+                data=request.data
+            )
+        )
+        request_serializer.is_valid(raise_exception=True)
+
+        delivery_method = request_serializer.validated_data[
+            "delivery_method"
+        ]
+
+        order = self.get_order(pk)
+        receipt, _ = _get_or_create_reception_receipt(
+            order,
+            request.user,
+        )
+
+        if (
+            delivery_method
+            == OrderReceptionReceiptDelivery.DeliveryMethod.EMAIL
+        ):
+            return self._deliver_email(
+                order,
+                receipt,
+                request.user,
+            )
+
+        if (
+            delivery_method
+            == OrderReceptionReceiptDelivery.DeliveryMethod.WHATSAPP
+        ):
+            return self._prepare_whatsapp(
+                order,
+                receipt,
+                request.user,
+            )
+
+        return self._register_print(
+            order,
+            receipt,
+            request.user,
+        )
+
+    def _deliver_email(self, order, receipt, user):
+        destination = (order.client.email or "").strip()
+
+        if not destination:
+            return Response(
+                {
+                    "detail": (
+                        "El cliente no tiene un correo electrónico "
+                        "registrado."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        order.preferred_notification_channel = (
+            ServiceOrder.NotificationChannel.EMAIL
+        )
+        order.save(
+            update_fields=[
+                "preferred_notification_channel",
+                "updated_at",
+            ]
+        )
+
+        try:
+            email = EmailMessage(
+                subject=(
+                    "Martini Cell - Comprobante de recepción "
+                    f"{order.tracking_code}"
+                ),
+                body=_receipt_email_body(receipt),
+                to=[destination],
+            )
+            sent_count = email.send(using="default")
+
+            if sent_count != 1:
+                raise RuntimeError(
+                    "El servicio de correo no confirmó el envío."
+                )
+
+        except Exception as error:
+            delivery = OrderReceptionReceiptDelivery.objects.create(
+                receipt=receipt,
+                delivery_method=(
+                    OrderReceptionReceiptDelivery.DeliveryMethod.EMAIL
+                ),
+                status=(
+                    OrderReceptionReceiptDelivery.DeliveryStatus.FAILED
+                ),
+                destination=destination,
+                detail=str(error)[:1000],
+                delivered_by=user,
+            )
+
+            return Response(
+                {
+                    "detail": (
+                        "El comprobante está generado, pero no fue posible "
+                        "enviar el correo. La orden no fue modificada ni "
+                        "eliminada."
+                    ),
+                    "delivery": {
+                        "id": delivery.id,
+                        "status": delivery.status,
+                    },
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        delivery = OrderReceptionReceiptDelivery.objects.create(
+            receipt=receipt,
+            delivery_method=(
+                OrderReceptionReceiptDelivery.DeliveryMethod.EMAIL
+            ),
+            status=OrderReceptionReceiptDelivery.DeliveryStatus.SENT,
+            destination=destination,
+            detail="Comprobante enviado por correo electrónico.",
+            delivered_by=user,
+        )
+
+        return Response(
+            {
+                "detail": "Comprobante enviado por correo electrónico.",
+                "preferred_notification_channel": (
+                    order.preferred_notification_channel
+                ),
+                "delivery": {
+                    "id": delivery.id,
+                    "status": delivery.status,
+                    "destination": delivery.destination,
+                },
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def _prepare_whatsapp(self, order, receipt, user):
+        destination = _whatsapp_number(order.client.phone)
+
+        if not destination:
+            return Response(
+                {
+                    "detail": (
+                        "El cliente no tiene un teléfono registrado "
+                        "para WhatsApp."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        order.preferred_notification_channel = (
+            ServiceOrder.NotificationChannel.WHATSAPP
+        )
+        order.save(
+            update_fields=[
+                "preferred_notification_channel",
+                "updated_at",
+            ]
+        )
+
+        message = (
+            "Hola. Martini Cell confirma la recepción de tu equipo. "
+            f"Tu código de orden y seguimiento es {order.tracking_code}. "
+            "Conserva este código para consultar el estado de la reparación."
+        )
+
+        whatsapp_url = (
+            f"https://wa.me/{destination}?text={quote(message)}"
+        )
+
+        delivery = OrderReceptionReceiptDelivery.objects.create(
+            receipt=receipt,
+            delivery_method=(
+                OrderReceptionReceiptDelivery.DeliveryMethod.WHATSAPP
+            ),
+            status=(
+                OrderReceptionReceiptDelivery.DeliveryStatus.PREPARED
+            ),
+            destination=destination,
+            detail=(
+                "Mensaje de WhatsApp preparado para envío manual. "
+                "La automatización mediante Cloud API queda como mejora."
+            ),
+            delivered_by=user,
+        )
+
+        return Response(
+            {
+                "detail": "Mensaje de WhatsApp preparado.",
+                "preferred_notification_channel": (
+                    order.preferred_notification_channel
+                ),
+                "whatsapp_url": whatsapp_url,
+                "message": message,
+                "receipt": OrderReceptionReceiptSerializer(
+                    receipt
+                ).data,
+                "delivery": {
+                    "id": delivery.id,
+                    "status": delivery.status,
+                    "destination": delivery.destination,
+                },
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def _register_print(self, order, receipt, user):
+        if order.client.email:
+            order.preferred_notification_channel = (
+                ServiceOrder.NotificationChannel.EMAIL
+            )
+            order.save(
+                update_fields=[
+                    "preferred_notification_channel",
+                    "updated_at",
+                ]
+            )
+
+        elif (
+            order.preferred_notification_channel
+            != ServiceOrder.NotificationChannel.WHATSAPP
+            or not order.client.phone
+        ):
+            return Response(
+                {
+                    "detail": (
+                        "El comprobante puede imprimirse, pero el cliente "
+                        "no tiene correo registrado. Selecciona WhatsApp "
+                        "como canal de notificaciones antes de confirmar "
+                        "la entrega impresa."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        delivery = OrderReceptionReceiptDelivery.objects.create(
+            receipt=receipt,
+            delivery_method=(
+                OrderReceptionReceiptDelivery.DeliveryMethod.PRINT
+            ),
+            status=OrderReceptionReceiptDelivery.DeliveryStatus.PRINTED,
+            destination="",
+            detail="Comprobante preparado y confirmado como impreso.",
+            delivered_by=user,
+        )
+
+        return Response(
+            {
+                "detail": "Entrega impresa registrada.",
+                "preferred_notification_channel": (
+                    order.preferred_notification_channel
+                ),
+                "receipt": OrderReceptionReceiptSerializer(
+                    receipt
+                ).data,
+                "delivery": {
+                    "id": delivery.id,
+                    "status": delivery.status,
+                },
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 # HU-27: historial inmutable de cambios sensibles de la orden.

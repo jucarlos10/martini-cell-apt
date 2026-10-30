@@ -26,6 +26,10 @@ class ServiceOrder(models.Model):
         CLOSED = "CLOSED", "Cerrado"
         REJECTED = "REJECTED", "No reparado/rechazado"
 
+    class NotificationChannel(models.TextChoices):
+        EMAIL = "EMAIL", "Correo electrónico"
+        WHATSAPP = "WHATSAPP", "WhatsApp"
+
     tracking_code = models.CharField(
         max_length=20,
         unique=True,
@@ -48,6 +52,31 @@ class ServiceOrder(models.Model):
 
     initial_observations = models.TextField(
         blank=True,
+    )
+
+    # HU-34: accesorios entregados junto con el equipo.
+    received_accessories = models.TextField(
+        blank=True,
+    )
+
+    # HU-34: abono recibido al momento del ingreso, si corresponde.
+    deposit_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        validators=[
+            MinValueValidator(Decimal("0.00")),
+        ],
+    )
+
+    # HU-34 / HU-36 / HU-37: canal preferido para comunicaciones
+    # posteriores de esta orden. Puede quedar vacío en órdenes antiguas
+    # o mientras aún no se haya definido la preferencia del cliente.
+    preferred_notification_channel = models.CharField(
+        max_length=10,
+        choices=NotificationChannel.choices,
+        blank=True,
+        default="",
     )
 
     status = models.CharField(
@@ -104,6 +133,105 @@ class ServiceOrder(models.Model):
             f"{self.client.name} - "
             f"{self.equipment.brand} {self.equipment.model}"
         )
+
+
+# HU-34: comprobante de recepción asociado a una orden.
+class OrderReceptionReceipt(models.Model):
+    order = models.OneToOneField(
+        ServiceOrder,
+        on_delete=models.PROTECT,
+        related_name="reception_receipt",
+    )
+
+    # Conserva una copia de los datos mostrados en el comprobante
+    # para que una reimpresión o reenvío mantenga la evidencia
+    # original de recepción aunque posteriormente cambie la orden.
+    snapshot = models.JSONField(
+        default=dict,
+    )
+
+    generated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reception_receipts_generated",
+    )
+
+    generated_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    def __str__(self):
+        return (
+            f"Comprobante de recepción - "
+            f"{self.order.tracking_code}"
+        )
+
+
+# HU-34: historial de entrega, impresión o preparación del comprobante.
+class OrderReceptionReceiptDelivery(models.Model):
+    class DeliveryMethod(models.TextChoices):
+        EMAIL = "EMAIL", "Correo electrónico"
+        WHATSAPP = "WHATSAPP", "WhatsApp"
+        PRINT = "PRINT", "Impreso"
+
+    class DeliveryStatus(models.TextChoices):
+        SENT = "SENT", "Enviado"
+        PREPARED = "PREPARED", "Preparado para envío"
+        PRINTED = "PRINTED", "Impreso"
+        FAILED = "FAILED", "Fallido"
+
+    receipt = models.ForeignKey(
+        OrderReceptionReceipt,
+        on_delete=models.PROTECT,
+        related_name="deliveries",
+    )
+
+    delivery_method = models.CharField(
+        max_length=10,
+        choices=DeliveryMethod.choices,
+    )
+
+    status = models.CharField(
+        max_length=10,
+        choices=DeliveryStatus.choices,
+    )
+
+    # Correo o teléfono utilizado. Para impresión puede quedar vacío.
+    destination = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    # Permite registrar información útil del intento sin modificar
+    # los datos originales de la orden ni del comprobante.
+    detail = models.TextField(
+        blank=True,
+    )
+
+    delivered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reception_receipt_deliveries",
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self):
+        return (
+            f"{self.receipt.order.tracking_code} - "
+            f"{self.get_delivery_method_display()} - "
+            f"{self.get_status_display()}"
+        )
+
 
 
 def order_evidence_upload_path(instance, filename):
