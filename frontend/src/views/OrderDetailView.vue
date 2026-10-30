@@ -19,6 +19,7 @@ const canViewFinancial = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canEditFinancial = currentUser?.role === 'ADMIN'
 const canViewWarranties = ['ADMIN', 'TECH'].includes(currentUser?.role)
 const canManageWarranties = ['ADMIN', 'TECH'].includes(currentUser?.role)
+const canManageReceptionReceipt = ['ADMIN', 'TECH'].includes(currentUser?.role)
 
 // HU-23: el técnico propone y el administrador resuelve.
 const canProposeWarrantyResolution = currentUser?.role === 'TECH'
@@ -35,6 +36,43 @@ const order = ref(null)
 const history = ref([])
 const technicalReport = ref(null)
 const times = ref(null)
+
+// HU-34: comprobante de recepción, canal preferido e historial de entregas.
+const receptionReceipt = ref(null)
+const receptionReceiptLoading = ref(false)
+const receptionReceiptError = ref('')
+const receptionReceiptSaving = ref(false)
+const receptionReceiptDeliveryMethod = ref('')
+const receptionReceiptDeliverySaving = ref(false)
+const receptionReceiptDeliveryError = ref('')
+const receptionReceiptDeliverySuccess = ref('')
+let receptionReceiptRequestId = 0
+
+const receptionReceiptSnapshot = computed(() =>
+  receptionReceipt.value?.snapshot || null
+)
+const receptionReceiptOrder = computed(() =>
+  receptionReceiptSnapshot.value?.order || {}
+)
+const receptionReceiptClient = computed(() =>
+  receptionReceiptSnapshot.value?.client || {}
+)
+const receptionReceiptEquipment = computed(() =>
+  receptionReceiptSnapshot.value?.equipment || {}
+)
+const receptionReceiptData = computed(() =>
+  receptionReceiptSnapshot.value?.reception || {}
+)
+const receptionReceiptTracking = computed(() =>
+  receptionReceiptSnapshot.value?.tracking || {}
+)
+
+const receptionReceiptHasEmail = computed(() =>
+  Boolean(String(receptionReceiptClient.value?.email || '').trim())
+)
+const receptionReceiptHasPhone = computed(() =>
+  Boolean(String(receptionReceiptClient.value?.phone || '').trim())
+)
 
 // HU-27: edición controlada e historial de cambios sensibles.
 const sensitiveChanges = ref([])
@@ -2791,8 +2829,551 @@ async function submitOrderPartCancellation(item) {
 
 // Conservamos la estructura de pestañas del prototipo.
 // Las secciones pendientes se habilitarán al integrar sus historias.
+
+function resetReceptionReceipt() {
+  ++receptionReceiptRequestId
+  receptionReceipt.value = null
+  receptionReceiptLoading.value = false
+  receptionReceiptError.value = ''
+  receptionReceiptSaving.value = false
+  receptionReceiptDeliveryMethod.value = ''
+  receptionReceiptDeliverySaving.value = false
+  receptionReceiptDeliveryError.value = ''
+  receptionReceiptDeliverySuccess.value = ''
+}
+
+function receptionReceiptApiError(data, fallback) {
+  if (typeof data?.detail === 'string') return data.detail
+  if (!data || typeof data !== 'object') return fallback
+
+  return Object.entries(data)
+    .map(([field, messages]) => {
+      const message = Array.isArray(messages)
+        ? messages.join(' ')
+        : String(messages)
+
+      return `${field}: ${message}`
+    })
+    .join(' ') || fallback
+}
+
+async function loadReceptionReceipt() {
+  if (!canManageReceptionReceipt || !order.value) return
+
+  const orderId = order.value.id
+  const sequence = loadSequence
+  const requestId = ++receptionReceiptRequestId
+
+  receptionReceiptLoading.value = true
+  receptionReceiptError.value = ''
+  receptionReceiptDeliveryError.value = ''
+  receptionReceiptDeliverySuccess.value = ''
+
+  try {
+    const response = await authenticatedFetch(
+      `/api/orders/${orderId}/reception-receipt/`
+    )
+    const data = await response.json().catch(() => null)
+
+    if (
+      sequence !== loadSequence ||
+      requestId !== receptionReceiptRequestId
+    ) {
+      return
+    }
+
+    if (response.status === 404) {
+      receptionReceipt.value = null
+      return
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        receptionReceiptApiError(
+          data,
+          'No fue posible cargar el comprobante de recepción.'
+        )
+      )
+    }
+
+    receptionReceipt.value = data
+
+    if (!receptionReceiptDeliveryMethod.value) {
+      if (String(data?.snapshot?.client?.email || '').trim()) {
+        receptionReceiptDeliveryMethod.value = 'EMAIL'
+      } else if (String(data?.snapshot?.client?.phone || '').trim()) {
+        receptionReceiptDeliveryMethod.value = 'WHATSAPP'
+      } else {
+        receptionReceiptDeliveryMethod.value = 'PRINT'
+      }
+    }
+  } catch (err) {
+    if (
+      sequence === loadSequence &&
+      requestId === receptionReceiptRequestId
+    ) {
+      receptionReceiptError.value =
+        err?.message || 'Error al consultar el comprobante de recepción.'
+    }
+  } finally {
+    if (
+      sequence === loadSequence &&
+      requestId === receptionReceiptRequestId
+    ) {
+      receptionReceiptLoading.value = false
+    }
+  }
+}
+
+async function generateReceptionReceipt() {
+  if (
+    !canManageReceptionReceipt ||
+    !order.value ||
+    receptionReceiptSaving.value
+  ) {
+    return
+  }
+
+  const orderId = order.value.id
+  const sequence = loadSequence
+  const requestId = ++receptionReceiptRequestId
+
+  receptionReceiptSaving.value = true
+  receptionReceiptError.value = ''
+  receptionReceiptDeliveryError.value = ''
+  receptionReceiptDeliverySuccess.value = ''
+
+  try {
+    const response = await authenticatedFetch(
+      `/api/orders/${orderId}/reception-receipt/`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      }
+    )
+    const data = await response.json().catch(() => null)
+
+    if (
+      sequence !== loadSequence ||
+      requestId !== receptionReceiptRequestId
+    ) {
+      return
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        receptionReceiptApiError(
+          data,
+          'No fue posible generar el comprobante de recepción.'
+        )
+      )
+    }
+
+    receptionReceipt.value = data
+
+    if (String(data?.snapshot?.client?.email || '').trim()) {
+      receptionReceiptDeliveryMethod.value = 'EMAIL'
+    } else if (String(data?.snapshot?.client?.phone || '').trim()) {
+      receptionReceiptDeliveryMethod.value = 'WHATSAPP'
+    } else {
+      receptionReceiptDeliveryMethod.value = 'PRINT'
+    }
+
+    receptionReceiptDeliverySuccess.value =
+      response.status === 201
+        ? 'Comprobante de recepción generado correctamente.'
+        : 'El comprobante de recepción ya existía y fue recuperado.'
+  } catch (err) {
+    if (
+      sequence === loadSequence &&
+      requestId === receptionReceiptRequestId
+    ) {
+      receptionReceiptError.value =
+        err?.message || 'Error al generar el comprobante de recepción.'
+    }
+  } finally {
+    if (
+      sequence === loadSequence &&
+      requestId === receptionReceiptRequestId
+    ) {
+      receptionReceiptSaving.value = false
+    }
+  }
+}
+
+async function ensureReceptionReceiptPrintChannel() {
+  if (receptionReceiptHasEmail.value) {
+    return true
+  }
+
+  if (!receptionReceiptHasPhone.value) {
+    throw new Error(
+      'El cliente no tiene correo ni teléfono registrado. ' +
+      'Actualiza sus datos de contacto antes de registrar una nueva impresión.'
+    )
+  }
+
+  if (order.value?.preferred_notification_channel === 'WHATSAPP') {
+    return true
+  }
+
+  const response = await authenticatedFetch(
+    `/api/orders/${order.value.id}/`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        preferred_notification_channel: 'WHATSAPP',
+      }),
+    }
+  )
+  const data = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new Error(
+      receptionReceiptApiError(
+        data,
+        'No fue posible definir WhatsApp como canal de notificaciones.'
+      )
+    )
+  }
+
+  order.value = data
+  return true
+}
+
+async function deliverReceptionReceipt(method) {
+  if (
+    !canManageReceptionReceipt ||
+    !order.value ||
+    !receptionReceipt.value ||
+    receptionReceiptDeliverySaving.value
+  ) {
+    return
+  }
+
+  receptionReceiptDeliverySaving.value = true
+  receptionReceiptDeliveryError.value = ''
+  receptionReceiptDeliverySuccess.value = ''
+
+  try {
+    if (method === 'PRINT') {
+      await ensureReceptionReceiptPrintChannel()
+    }
+
+    const response = await authenticatedFetch(
+      `/api/orders/${order.value.id}/reception-receipt/deliver/`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          delivery_method: method,
+        }),
+      }
+    )
+    const data = await response.json().catch(() => null)
+
+    if (!response.ok) {
+      throw new Error(
+        receptionReceiptApiError(
+          data,
+          'No fue posible procesar el comprobante.'
+        )
+      )
+    }
+
+    if (data?.preferred_notification_channel) {
+      order.value = {
+        ...order.value,
+        preferred_notification_channel:
+          data.preferred_notification_channel,
+        preferred_notification_channel_display:
+          data.preferred_notification_channel === 'EMAIL'
+            ? 'Correo electrónico'
+            : 'WhatsApp',
+      }
+    }
+
+    receptionReceiptDeliverySuccess.value =
+      data?.detail || 'Comprobante procesado correctamente.'
+
+    if (method === 'WHATSAPP' && data?.whatsapp_url) {
+      window.open(
+        data.whatsapp_url,
+        '_blank',
+        'noopener,noreferrer'
+      )
+    }
+
+    await loadReceptionReceipt()
+
+    if (method === 'PRINT') {
+      printReceptionReceipt()
+    }
+  } catch (err) {
+    receptionReceiptDeliveryError.value =
+      err?.message || 'Error al procesar el comprobante.'
+  } finally {
+    receptionReceiptDeliverySaving.value = false
+  }
+}
+
+function escapeReceptionReceiptHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+}
+
+function printReceptionReceipt() {
+  if (!receptionReceiptSnapshot.value) return
+
+  const snapshot = receptionReceiptSnapshot.value
+  const orderData = snapshot.order || {}
+  const clientData = snapshot.client || {}
+  const equipmentData = snapshot.equipment || {}
+  const receptionData = snapshot.reception || {}
+  const trackingData = snapshot.tracking || {}
+
+  const printWindow = window.open('', '_blank')
+
+  if (!printWindow) {
+    receptionReceiptDeliveryError.value =
+      'El navegador bloqueó la ventana de impresión. ' +
+      'Permite ventanas emergentes e inténtalo nuevamente.'
+    return
+  }
+
+  const identifier = equipmentData.identifier
+    ? `
+      <div class="row">
+        <span>${escapeReceptionReceiptHtml(
+          equipmentData.identifier_label || 'Identificador'
+        )}</span>
+        <strong>${escapeReceptionReceiptHtml(
+          equipmentData.identifier
+        )}</strong>
+      </div>
+    `
+    : ''
+
+  printWindow.document.write(`
+    <!doctype html>
+    <html lang="es">
+      <head>
+        <meta charset="utf-8">
+        <title>Comprobante ${escapeReceptionReceiptHtml(
+          orderData.tracking_code
+        )}</title>
+        <style>
+          * { box-sizing: border-box; }
+          body {
+            font-family: Arial, sans-serif;
+            color: #111;
+            margin: 32px;
+            line-height: 1.4;
+          }
+          .header {
+            display: flex;
+            justify-content: space-between;
+            gap: 24px;
+            border-bottom: 2px solid #111;
+            padding-bottom: 16px;
+            margin-bottom: 20px;
+          }
+          h1 { margin: 0; font-size: 24px; }
+          h2 { font-size: 16px; margin: 22px 0 10px; }
+          .code { font-size: 20px; font-weight: 700; }
+          .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px 24px;
+          }
+          .row {
+            display: flex;
+            flex-direction: column;
+            border-bottom: 1px solid #ddd;
+            padding: 7px 0;
+          }
+          .row span { color: #555; font-size: 12px; }
+          .box {
+            border: 1px solid #bbb;
+            padding: 12px;
+            min-height: 56px;
+            white-space: pre-wrap;
+          }
+          .confirmation {
+            margin-top: 22px;
+            border: 1px solid #111;
+            padding: 14px;
+          }
+          .signatures {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 50px;
+            margin-top: 70px;
+          }
+          .signature {
+            border-top: 1px solid #111;
+            text-align: center;
+            padding-top: 6px;
+          }
+          .small { font-size: 12px; color: #555; }
+          @media print {
+            body { margin: 15mm; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div>
+            <h1>${escapeReceptionReceiptHtml(
+              snapshot.business?.name || 'Martini Cell'
+            )}</h1>
+            <div>Comprobante de recepción</div>
+          </div>
+          <div>
+            <div class="small">Código de orden y seguimiento</div>
+            <div class="code">${escapeReceptionReceiptHtml(
+              orderData.tracking_code
+            )}</div>
+          </div>
+        </div>
+
+        <div class="grid">
+          <div class="row">
+            <span>Fecha y hora de recepción</span>
+            <strong>${escapeReceptionReceiptHtml(
+              formatDate(orderData.received_at)
+            )}</strong>
+          </div>
+          <div class="row">
+            <span>Recibido por</span>
+            <strong>${escapeReceptionReceiptHtml(
+              receptionData.received_by || 'Martini Cell'
+            )}</strong>
+          </div>
+        </div>
+
+        <h2>Cliente</h2>
+        <div class="grid">
+          <div class="row">
+            <span>Nombre</span>
+            <strong>${escapeReceptionReceiptHtml(clientData.name)}</strong>
+          </div>
+          <div class="row">
+            <span>Teléfono</span>
+            <strong>${escapeReceptionReceiptHtml(
+              clientData.phone || 'No registrado'
+            )}</strong>
+          </div>
+          <div class="row">
+            <span>Correo</span>
+            <strong>${escapeReceptionReceiptHtml(
+              clientData.email || 'No registrado'
+            )}</strong>
+          </div>
+        </div>
+
+        <h2>Equipo recibido</h2>
+        <div class="grid">
+          <div class="row">
+            <span>Tipo</span>
+            <strong>${escapeReceptionReceiptHtml(
+              equipmentData.type_display || equipmentData.type
+            )}</strong>
+          </div>
+          <div class="row">
+            <span>Marca</span>
+            <strong>${escapeReceptionReceiptHtml(
+              equipmentData.brand
+            )}</strong>
+          </div>
+          <div class="row">
+            <span>Modelo</span>
+            <strong>${escapeReceptionReceiptHtml(
+              equipmentData.model
+            )}</strong>
+          </div>
+          <div class="row">
+            <span>Color</span>
+            <strong>${escapeReceptionReceiptHtml(
+              equipmentData.color || 'No registrado'
+            )}</strong>
+          </div>
+          ${identifier}
+        </div>
+
+        <h2>Recepción</h2>
+        <div class="small">Falla o problema informado</div>
+        <div class="box">${escapeReceptionReceiptHtml(
+          receptionData.reported_issue
+        )}</div>
+
+        <div class="small" style="margin-top:12px;">
+          Condición / observaciones iniciales
+        </div>
+        <div class="box">${escapeReceptionReceiptHtml(
+          receptionData.initial_observations ||
+          'Sin observaciones adicionales'
+        )}</div>
+
+        <div class="small" style="margin-top:12px;">
+          Accesorios entregados
+        </div>
+        <div class="box">${escapeReceptionReceiptHtml(
+          receptionData.received_accessories ||
+          'Sin accesorios registrados'
+        )}</div>
+
+        <div class="row" style="margin-top:12px;">
+          <span>Abono recibido</span>
+          <strong>${escapeReceptionReceiptHtml(
+            formatMoney(receptionData.deposit_amount)
+          )}</strong>
+        </div>
+
+        <div class="confirmation">
+          <strong>${escapeReceptionReceiptHtml(
+            receptionData.confirmation ||
+            'Martini Cell confirma la recepción del equipo descrito.'
+          )}</strong>
+          <div class="small" style="margin-top:8px;">
+            ${escapeReceptionReceiptHtml(
+              trackingData.instructions || ''
+            )}
+          </div>
+        </div>
+
+        <div class="signatures">
+          <div class="signature">Firma cliente</div>
+          <div class="signature">Firma recepción Martini Cell</div>
+        </div>
+      </body>
+    </html>
+  `)
+
+  printWindow.document.close()
+  printWindow.focus()
+
+  setTimeout(() => {
+    printWindow.print()
+  }, 250)
+}
+
 const tabs = [
   { key: 'resumen', label: 'Resumen', enabled: true },
+  ...(canManageReceptionReceipt
+    ? [{ key: 'comprobante', label: 'Comprobante', enabled: true }]
+    : []),
   { key: 'diagnostico', label: 'Diagnóstico', enabled: true },
   { key: 'linea', label: 'Línea de tiempo', enabled: true },
   { key: 'evidencias', label: 'Evidencias', enabled: true },
@@ -2889,6 +3470,9 @@ async function loadEvidences() {
 
 function selectTab(key) {
   tab.value = key
+  if (key === 'comprobante' && order.value && canManageReceptionReceipt) {
+    loadReceptionReceipt()
+  }
   if (key === 'evidencias' && order.value) loadEvidences()
   if (key === 'linea' && order.value) refreshOrderTracking()
   if (key === 'repuestos' && order.value) refreshPartsAndFinancial()
@@ -3307,6 +3891,7 @@ async function loadOrder() {
   resetWarranties()
   resetViability()
   resetSensitiveOrderState()
+  resetReceptionReceipt()
 
   order.value = null
   history.value = []
@@ -3779,6 +4364,465 @@ watch(() => route.params.id, loadOrder, { immediate: true })
             </div>
           </div>
         </div>
+      </section>
+
+      <!-- HU-34: comprobante de recepción y reenvíos -->
+      <section v-if="tab === 'comprobante'">
+        <div
+          v-if="!canManageReceptionReceipt"
+          class="alert alert-info"
+        >
+          Tu perfil no tiene permiso para gestionar el comprobante de recepción.
+        </div>
+
+        <template v-else>
+          <div
+            v-if="receptionReceiptLoading"
+            class="mc-card p-4 text-center"
+          >
+            <div
+              class="spinner-border text-primary mb-2"
+              role="status"
+            ></div>
+            <div class="text-muted">
+              Cargando comprobante de recepción...
+            </div>
+          </div>
+
+          <div
+            v-else-if="receptionReceiptError"
+            class="mc-card p-4"
+          >
+            <div class="alert alert-warning mb-3">
+              {{ receptionReceiptError }}
+            </div>
+
+            <button
+              type="button"
+              class="btn btn-outline-primary"
+              @click="loadReceptionReceipt"
+            >
+              Reintentar
+            </button>
+          </div>
+
+          <div
+            v-else-if="!receptionReceipt"
+            class="mc-card p-4"
+          >
+            <h5>Comprobante de recepción</h5>
+
+            <p class="text-muted mb-3">
+              Esta orden todavía no tiene un comprobante de recepción
+              generado. Al generarlo se guardará una copia de los datos
+              actuales de recepción para futuras reimpresiones o reenvíos.
+            </p>
+
+            <button
+              type="button"
+              class="btn btn-primary"
+              :disabled="receptionReceiptSaving"
+              @click="generateReceptionReceipt"
+            >
+              <span
+                v-if="receptionReceiptSaving"
+                class="spinner-border spinner-border-sm me-2"
+                aria-hidden="true"
+              ></span>
+              {{
+                receptionReceiptSaving
+                  ? 'Generando...'
+                  : 'Generar comprobante'
+              }}
+            </button>
+          </div>
+
+          <template v-else>
+            <div class="row g-3">
+              <div class="col-xl-8">
+                <div class="mc-card p-4 h-100">
+                  <div
+                    class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4"
+                  >
+                    <div>
+                      <h5 class="mb-1">Comprobante de recepción</h5>
+                      <div class="small text-muted">
+                        Generado:
+                        {{ formatDate(receptionReceipt.generated_at) }}
+                        · por
+                        {{
+                          receptionReceipt.generated_by_username ||
+                          'usuario no disponible'
+                        }}
+                      </div>
+                    </div>
+
+                    <div class="text-end">
+                      <div class="small text-muted">
+                        Código de orden y seguimiento
+                      </div>
+                      <strong class="fs-5">
+                        {{ receptionReceiptOrder.tracking_code }}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div class="row g-3">
+                    <div class="col-md-6">
+                      <div class="border rounded p-3 h-100">
+                        <h6>Cliente</h6>
+                        <div class="fw-semibold">
+                          {{ receptionReceiptClient.name }}
+                        </div>
+                        <div class="small mt-2">
+                          <strong>Teléfono:</strong>
+                          {{
+                            receptionReceiptClient.phone ||
+                            'No registrado'
+                          }}
+                        </div>
+                        <div class="small">
+                          <strong>Correo:</strong>
+                          {{
+                            receptionReceiptClient.email ||
+                            'No registrado'
+                          }}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="col-md-6">
+                      <div class="border rounded p-3 h-100">
+                        <h6>Equipo recibido</h6>
+                        <div class="fw-semibold">
+                          {{
+                            receptionReceiptEquipment.type_display ||
+                            receptionReceiptEquipment.type
+                          }}
+                          ·
+                          {{ receptionReceiptEquipment.brand }}
+                          {{ receptionReceiptEquipment.model }}
+                        </div>
+
+                        <div
+                          v-if="receptionReceiptEquipment.color"
+                          class="small mt-2"
+                        >
+                          <strong>Color:</strong>
+                          {{ receptionReceiptEquipment.color }}
+                        </div>
+
+                        <div
+                          v-if="receptionReceiptEquipment.identifier"
+                          class="small"
+                        >
+                          <strong>
+                            {{ receptionReceiptEquipment.identifier_label }}:
+                          </strong>
+                          {{ receptionReceiptEquipment.identifier }}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="col-12">
+                      <div class="border rounded p-3">
+                        <div class="row g-3">
+                          <div class="col-md-6">
+                            <div class="small text-muted">
+                              Fecha y hora de recepción
+                            </div>
+                            <strong>
+                              {{
+                                formatDate(
+                                  receptionReceiptOrder.received_at
+                                )
+                              }}
+                            </strong>
+                          </div>
+
+                          <div class="col-md-6">
+                            <div class="small text-muted">
+                              Recibido por
+                            </div>
+                            <strong>
+                              {{
+                                receptionReceiptData.received_by ||
+                                'Martini Cell'
+                              }}
+                            </strong>
+                          </div>
+
+                          <div class="col-12">
+                            <div class="small text-muted">
+                              Falla reportada
+                            </div>
+                            <div>
+                              {{ receptionReceiptData.reported_issue }}
+                            </div>
+                          </div>
+
+                          <div class="col-md-6">
+                            <div class="small text-muted">
+                              Condición / observaciones iniciales
+                            </div>
+                            <div>
+                              {{
+                                receptionReceiptData.initial_observations ||
+                                'Sin observaciones adicionales'
+                              }}
+                            </div>
+                          </div>
+
+                          <div class="col-md-6">
+                            <div class="small text-muted">
+                              Accesorios entregados
+                            </div>
+                            <div>
+                              {{
+                                receptionReceiptData.received_accessories ||
+                                'Sin accesorios registrados'
+                              }}
+                            </div>
+                          </div>
+
+                          <div class="col-md-6">
+                            <div class="small text-muted">
+                              Abono recibido
+                            </div>
+                            <strong>
+                              {{
+                                formatMoney(
+                                  receptionReceiptData.deposit_amount
+                                )
+                              }}
+                            </strong>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="alert alert-light border mt-3 mb-0">
+                    <strong>
+                      {{
+                        receptionReceiptData.confirmation ||
+                        'Martini Cell confirma la recepción del equipo descrito.'
+                      }}
+                    </strong>
+
+                    <div class="small text-muted mt-2">
+                      {{ receptionReceiptTracking.instructions }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="col-xl-4">
+                <div class="mc-card p-4 mb-3">
+                  <h5>Entregar nuevamente</h5>
+
+                  <div class="small text-muted mb-3">
+                    Canal preferido actual:
+                    <strong>
+                      {{
+                        order.preferred_notification_channel_display ||
+                        (
+                          order.preferred_notification_channel === 'EMAIL'
+                            ? 'Correo electrónico'
+                            : order.preferred_notification_channel === 'WHATSAPP'
+                              ? 'WhatsApp'
+                              : 'No definido'
+                        )
+                      }}
+                    </strong>
+                  </div>
+
+                  <div
+                    v-if="receptionReceiptDeliverySuccess"
+                    class="alert alert-success"
+                    role="status"
+                  >
+                    {{ receptionReceiptDeliverySuccess }}
+                  </div>
+
+                  <div
+                    v-if="receptionReceiptDeliveryError"
+                    class="alert alert-danger"
+                    role="alert"
+                  >
+                    {{ receptionReceiptDeliveryError }}
+                  </div>
+
+                  <label
+                    for="receipt-delivery-method"
+                    class="form-label"
+                  >
+                    Medio
+                  </label>
+
+                  <select
+                    id="receipt-delivery-method"
+                    v-model="receptionReceiptDeliveryMethod"
+                    class="form-select mb-3"
+                    :disabled="receptionReceiptDeliverySaving"
+                  >
+                    <option value="">Seleccionar...</option>
+                    <option
+                      value="EMAIL"
+                      :disabled="!receptionReceiptHasEmail"
+                    >
+                      Correo electrónico
+                    </option>
+                    <option
+                      value="WHATSAPP"
+                      :disabled="!receptionReceiptHasPhone"
+                    >
+                      WhatsApp
+                    </option>
+                    <option
+                      value="PRINT"
+                      :disabled="
+                        !receptionReceiptHasEmail &&
+                        !receptionReceiptHasPhone
+                      "
+                    >
+                      Impreso
+                    </option>
+                  </select>
+
+                  <div
+                    v-if="
+                      receptionReceiptDeliveryMethod === 'PRINT' &&
+                      !receptionReceiptHasEmail &&
+                      receptionReceiptHasPhone
+                    "
+                    class="alert alert-info small"
+                  >
+                    Como el cliente no tiene correo, WhatsApp quedará
+                    como canal preferido para las notificaciones posteriores.
+                  </div>
+
+                  <button
+                    type="button"
+                    class="btn btn-primary w-100"
+                    :disabled="
+                      receptionReceiptDeliverySaving ||
+                      !receptionReceiptDeliveryMethod ||
+                      (
+                        receptionReceiptDeliveryMethod === 'EMAIL' &&
+                        !receptionReceiptHasEmail
+                      ) ||
+                      (
+                        receptionReceiptDeliveryMethod === 'WHATSAPP' &&
+                        !receptionReceiptHasPhone
+                      )
+                    "
+                    @click="
+                      deliverReceptionReceipt(
+                        receptionReceiptDeliveryMethod
+                      )
+                    "
+                  >
+                    <span
+                      v-if="receptionReceiptDeliverySaving"
+                      class="spinner-border spinner-border-sm me-2"
+                      aria-hidden="true"
+                    ></span>
+
+                    {{
+                      receptionReceiptDeliverySaving
+                        ? 'Procesando...'
+                        : receptionReceiptDeliveryMethod === 'EMAIL'
+                          ? 'Reenviar por correo'
+                          : receptionReceiptDeliveryMethod === 'WHATSAPP'
+                            ? 'Preparar WhatsApp'
+                            : receptionReceiptDeliveryMethod === 'PRINT'
+                              ? 'Registrar e imprimir'
+                              : 'Seleccionar medio'
+                    }}
+                  </button>
+
+                  <button
+                    type="button"
+                    class="btn btn-outline-secondary w-100 mt-2"
+                    :disabled="receptionReceiptDeliverySaving"
+                    @click="printReceptionReceipt"
+                  >
+                    <i class="bi bi-printer me-1"></i>
+                    Vista de impresión
+                  </button>
+                </div>
+
+                <div class="mc-card p-4">
+                  <h5>Historial de entrega</h5>
+
+                  <div
+                    v-if="!receptionReceipt.deliveries?.length"
+                    class="text-muted small"
+                  >
+                    Todavía no hay entregas registradas.
+                  </div>
+
+                  <div
+                    v-else
+                    class="d-flex flex-column gap-3"
+                  >
+                    <div
+                      v-for="item in receptionReceipt.deliveries"
+                      :key="item.id"
+                      class="border rounded p-3"
+                    >
+                      <div
+                        class="d-flex justify-content-between gap-2"
+                      >
+                        <strong>
+                          {{
+                            item.delivery_method_display ||
+                            item.delivery_method
+                          }}
+                        </strong>
+
+                        <span class="badge text-bg-light">
+                          {{
+                            item.status_display ||
+                            item.status
+                          }}
+                        </span>
+                      </div>
+
+                      <div class="small text-muted mt-2">
+                        {{ formatDate(item.created_at) }}
+                      </div>
+
+                      <div
+                        v-if="item.destination"
+                        class="small mt-1"
+                      >
+                        <strong>Destino:</strong>
+                        {{ item.destination }}
+                      </div>
+
+                      <div
+                        v-if="item.delivered_by_username"
+                        class="small"
+                      >
+                        <strong>Usuario:</strong>
+                        {{ item.delivered_by_username }}
+                      </div>
+
+                      <div
+                        v-if="item.detail"
+                        class="small text-muted mt-1"
+                      >
+                        {{ item.detail }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+        </template>
       </section>
 
       <!-- HU-09: diagnóstico, reparación e historial real -->

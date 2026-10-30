@@ -6,6 +6,8 @@ from .public_tracking import PublicOrderStatusView
 from .views import (
     OrderEvidenceDownloadView,
     OrderEvidenceListCreateView,
+    OrderReceptionReceiptDeliveryView,
+    OrderReceptionReceiptView,
     OrderSensitiveChangeHistoryView,
     OrderStatusHistoryView,
     OrderStatusView,
@@ -65,6 +67,18 @@ urlpatterns = [
         "<int:pk>/",
         ServiceOrderDetailView.as_view(),
         name="service-order-detail",
+    ),
+
+    # HU-34: comprobante de recepción y registro de entrega.
+    path(
+        "<int:pk>/reception-receipt/",
+        OrderReceptionReceiptView.as_view(),
+        name="order-reception-receipt",
+    ),
+    path(
+        "<int:pk>/reception-receipt/deliver/",
+        OrderReceptionReceiptDeliveryView.as_view(),
+        name="order-reception-receipt-delivery",
     ),
     # HU-27: Historial de cambios sensibles de la orden.
     path(

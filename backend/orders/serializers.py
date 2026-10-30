@@ -12,6 +12,8 @@ from accounts.models import User
 
 from .models import (
     OrderEvidence,
+    OrderReceptionReceipt,
+    OrderReceptionReceiptDelivery,
     OrderSensitiveChangeHistory,
     OrderStatusHistory,
     OrderTechnicalReport,
@@ -38,6 +40,11 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
         read_only=True,
     )
 
+    preferred_notification_channel_display = serializers.CharField(
+        source="get_preferred_notification_channel_display",
+        read_only=True,
+    )
+
     # HU-27: motivo del cambio sensible. No se guarda en ServiceOrder;
     # se conserva únicamente en el historial de auditoría.
     change_reason = serializers.CharField(
@@ -58,6 +65,10 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
             "equipment_description",
             "reported_issue",
             "initial_observations",
+            "received_accessories",
+            "deposit_amount",
+            "preferred_notification_channel",
+            "preferred_notification_channel_display",
             "status",
             "status_display",
             "received_at",
@@ -71,6 +82,7 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
             "tracking_code",
             "client_name",
             "equipment_description",
+            "preferred_notification_channel_display",
             "status",
             "status_display",
             "received_at",
@@ -164,6 +176,43 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
                     "equipment": (
                         "El equipo seleccionado no pertenece "
                         "al cliente indicado."
+                    )
+                }
+            )
+
+        preferred_channel = attrs.get(
+            "preferred_notification_channel",
+            getattr(
+                self.instance,
+                "preferred_notification_channel",
+                "",
+            ),
+        )
+
+        if (
+            preferred_channel == ServiceOrder.NotificationChannel.EMAIL
+            and client
+            and not client.email
+        ):
+            raise serializers.ValidationError(
+                {
+                    "preferred_notification_channel": (
+                        "El cliente no tiene un correo electrónico "
+                        "registrado para recibir notificaciones."
+                    )
+                }
+            )
+
+        if (
+            preferred_channel == ServiceOrder.NotificationChannel.WHATSAPP
+            and client
+            and not client.phone
+        ):
+            raise serializers.ValidationError(
+                {
+                    "preferred_notification_channel": (
+                        "El cliente no tiene un teléfono registrado "
+                        "para recibir notificaciones por WhatsApp."
                     )
                 }
             )
@@ -349,6 +398,84 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
             )
 
         return order
+
+
+class OrderReceptionReceiptDeliverySerializer(
+    serializers.ModelSerializer
+):
+    delivery_method_display = serializers.CharField(
+        source="get_delivery_method_display",
+        read_only=True,
+    )
+
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
+
+    delivered_by_username = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrderReceptionReceiptDelivery
+        fields = (
+            "id",
+            "delivery_method",
+            "delivery_method_display",
+            "status",
+            "status_display",
+            "destination",
+            "detail",
+            "delivered_by_username",
+            "created_at",
+        )
+        read_only_fields = fields
+
+    def get_delivered_by_username(self, obj):
+        if not obj.delivered_by_id:
+            return None
+
+        return obj.delivered_by.username
+
+
+class OrderReceptionReceiptSerializer(serializers.ModelSerializer):
+    tracking_code = serializers.CharField(
+        source="order.tracking_code",
+        read_only=True,
+    )
+
+    generated_by_username = serializers.SerializerMethodField()
+
+    deliveries = OrderReceptionReceiptDeliverySerializer(
+        many=True,
+        read_only=True,
+    )
+
+    class Meta:
+        model = OrderReceptionReceipt
+        fields = (
+            "id",
+            "order",
+            "tracking_code",
+            "snapshot",
+            "generated_by_username",
+            "generated_at",
+            "deliveries",
+        )
+        read_only_fields = fields
+
+    def get_generated_by_username(self, obj):
+        if not obj.generated_by_id:
+            return None
+
+        return obj.generated_by.username
+
+
+class OrderReceptionReceiptDeliveryRequestSerializer(
+    serializers.Serializer
+):
+    delivery_method = serializers.ChoiceField(
+        choices=OrderReceptionReceiptDelivery.DeliveryMethod.choices,
+    )
 
 
 class OrderSensitiveChangeHistorySerializer(
