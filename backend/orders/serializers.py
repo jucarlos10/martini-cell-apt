@@ -19,6 +19,7 @@ from .models import (
     OrderReceptionReceiptDelivery,
     OrderSensitiveChangeHistory,
     OrderStatusHistory,
+    OrderStatusNotification,
     OrderTechnicalReport,
     OrderTechnicalReportHistory,
     ServiceOrder,
@@ -617,6 +618,83 @@ class OrderChatNotificationSerializer(serializers.ModelSerializer):
             return None
 
         return obj.triggered_by.username
+
+
+# HU-37: historial interno de notificaciones originadas por cambios de estado.
+class OrderStatusNotificationSerializer(serializers.ModelSerializer):
+    channel_display = serializers.CharField(
+        source="get_channel_display",
+        read_only=True,
+    )
+
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
+
+    from_status = serializers.CharField(
+        source="status_history.from_status",
+        read_only=True,
+    )
+
+    from_status_display = serializers.SerializerMethodField()
+
+    to_status = serializers.CharField(
+        source="status_history.to_status",
+        read_only=True,
+    )
+
+    to_status_display = serializers.SerializerMethodField()
+
+    changed_at = serializers.DateTimeField(
+        source="status_history.changed_at",
+        read_only=True,
+    )
+
+    triggered_by_username = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrderStatusNotification
+        fields = (
+            "id",
+            "status_history",
+            "from_status",
+            "from_status_display",
+            "to_status",
+            "to_status_display",
+            "changed_at",
+            "channel",
+            "channel_display",
+            "status",
+            "status_display",
+            "destination",
+            "prepared_message",
+            "action_url",
+            "detail",
+            "triggered_by_username",
+            "created_at",
+        )
+        read_only_fields = fields
+
+    def get_from_status_display(self, obj):
+        if not obj.status_history.from_status:
+            return None
+
+        return ServiceOrder.Status(
+            obj.status_history.from_status
+        ).label
+
+    def get_to_status_display(self, obj):
+        return ServiceOrder.Status(
+            obj.status_history.to_status
+        ).label
+
+    def get_triggered_by_username(self, obj):
+        if not obj.triggered_by_id:
+            return None
+
+        return obj.triggered_by.username
+
 
 # HU-35: fila de la bandeja interna de conversaciones.
 class OrderChatConversationListSerializer(serializers.ModelSerializer):

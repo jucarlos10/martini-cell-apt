@@ -381,8 +381,55 @@ const statusSaving = ref(false)
 const statusError = ref('')
 const statusFormError = ref('')
 const statusSuccess = ref('')
+
+// HU-37: resultado del intento de notificación asociado al último cambio.
+const statusNotificationFeedback = ref(null)
+
 const nextStatus = ref('')
 const statusNote = ref('')
+
+function statusNotificationAlertClass(notification) {
+  if (!notification) return 'alert-secondary'
+
+  if (notification.status === 'SENT') return 'alert-success'
+  if (notification.status === 'PREPARED') return 'alert-info'
+  if (notification.status === 'FAILED') return 'alert-warning'
+
+  return 'alert-secondary'
+}
+
+function statusNotificationTitle(notification) {
+  if (!notification) return ''
+
+  if (notification.status === 'SENT') {
+    return 'Notificación enviada'
+  }
+
+  if (notification.status === 'PREPARED') {
+    return 'WhatsApp preparado'
+  }
+
+  if (notification.status === 'FAILED') {
+    return 'Estado guardado; notificación no completada'
+  }
+
+  return 'Resultado de la notificación'
+}
+
+function statusNotificationChannelLabel(notification) {
+  if (!notification) return 'Sin canal'
+
+  return (
+    notification.channel_display ||
+    (
+      notification.channel === 'EMAIL'
+        ? 'Correo electrónico'
+        : notification.channel === 'WHATSAPP'
+          ? 'WhatsApp'
+          : 'Sin canal configurado'
+    )
+  )
+}
 
 // HU-09: informe técnico real y sus revisiones.
 const technicalReportHistory = ref([])
@@ -3817,6 +3864,8 @@ async function changeOrderStatus() {
   if (!order.value || !canChangeStatus || statusSaving.value || statusLoading.value) return
   statusFormError.value = ''
   statusSuccess.value = ''
+  statusNotificationFeedback.value = null
+
   const selected = statusInfo.value?.allowed_transitions?.find(
     (item) => item.status === nextStatus.value
   )
@@ -3849,6 +3898,8 @@ async function changeOrderStatus() {
     statusNote.value = ''
     nextStatus.value = ''
     statusSuccess.value = `Estado actualizado a ${data.status_display}. El cambio quedó registrado en el historial.`
+    statusNotificationFeedback.value = data?.notification_result || null
+
     await refreshOrderTracking()
   } catch (err) {
     if (sequence === loadSequence) {
@@ -3874,6 +3925,7 @@ async function loadOrder() {
   statusError.value = ''
   statusFormError.value = ''
   statusSuccess.value = ''
+  statusNotificationFeedback.value = null
   nextStatus.value = ''
   statusNote.value = ''
   technicalReportHistory.value = []
@@ -5054,6 +5106,69 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                   · {{ event.changed_by_username || 'Usuario no disponible' }}
                 </div>
                 <div v-if="event.note" class="mt-1">{{ event.note }}</div>
+
+                <div
+                  v-if="event.notifications?.length"
+                  class="mt-2"
+                >
+                  <div
+                    v-for="notification in event.notifications"
+                    :key="notification.id"
+                    class="border rounded p-2 small mt-2"
+                  >
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                      <strong>
+                        {{ statusNotificationChannelLabel(notification) }}
+                      </strong>
+                      <span
+                        class="badge"
+                        :class="
+                          notification.status === 'SENT'
+                            ? 'text-bg-success'
+                            : notification.status === 'PREPARED'
+                              ? 'text-bg-info'
+                              : 'text-bg-warning'
+                        "
+                      >
+                        {{ notification.status_display || notification.status }}
+                      </span>
+                    </div>
+
+                    <div
+                      v-if="notification.destination"
+                      class="text-muted mt-1"
+                    >
+                      Destino: {{ notification.destination }}
+                    </div>
+
+                    <div
+                      v-if="notification.detail"
+                      class="text-muted mt-1"
+                    >
+                      {{ notification.detail }}
+                    </div>
+
+                    <div class="text-muted mt-1">
+                      {{ formatDate(notification.created_at) }}
+                      <template v-if="notification.triggered_by_username">
+                        · {{ notification.triggered_by_username }}
+                      </template>
+                    </div>
+
+                    <a
+                      v-if="
+                        notification.status === 'PREPARED' &&
+                        notification.action_url
+                      "
+                      :href="notification.action_url"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="btn btn-sm btn-outline-success mt-2"
+                    >
+                      Abrir WhatsApp
+                    </a>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -5078,6 +5193,52 @@ watch(() => route.params.id, loadOrder, { immediate: true })
             <div v-if="statusSuccess" class="alert alert-success small mt-3" role="status">
               {{ statusSuccess }}
             </div>
+
+            <div
+              v-if="statusNotificationFeedback"
+              class="alert small mt-3"
+              :class="statusNotificationAlertClass(statusNotificationFeedback)"
+              role="status"
+            >
+              <div class="fw-semibold">
+                {{ statusNotificationTitle(statusNotificationFeedback) }}
+              </div>
+
+              <div class="mt-1">
+                Canal:
+                <strong>
+                  {{ statusNotificationChannelLabel(statusNotificationFeedback) }}
+                </strong>
+              </div>
+
+              <div
+                v-if="statusNotificationFeedback.destination"
+                class="mt-1"
+              >
+                Destino: {{ statusNotificationFeedback.destination }}
+              </div>
+
+              <div
+                v-if="statusNotificationFeedback.detail"
+                class="mt-1"
+              >
+                {{ statusNotificationFeedback.detail }}
+              </div>
+
+              <a
+                v-if="
+                  statusNotificationFeedback.status === 'PREPARED' &&
+                  statusNotificationFeedback.action_url
+                "
+                :href="statusNotificationFeedback.action_url"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn btn-sm btn-success mt-2"
+              >
+                Abrir WhatsApp
+              </a>
+            </div>
+
             <div v-if="statusFormError" class="alert alert-danger small mt-3" role="alert">
               {{ statusFormError }}
             </div>
