@@ -22,6 +22,7 @@ const changingStatus = ref(false)
 
 const listError = ref('')
 const conversationError = ref('')
+const notificationFeedback = ref(null)
 
 const statusFilter = ref('')
 const unreadOnly = ref(false)
@@ -86,6 +87,37 @@ function statusBorderClass(status) {
     ANSWERED: 'chat-card-answered',
     CLOSED: 'chat-card-closed',
   }[status] || ''
+}
+
+function notificationAlertClass(status) {
+  return {
+    SENT: 'alert-success',
+    PREPARED: 'alert-info',
+    FAILED: 'alert-warning',
+  }[status] || 'alert-secondary'
+}
+
+function notificationBadgeClass(status) {
+  return {
+    SENT: 'text-bg-success',
+    PREPARED: 'text-bg-info',
+    FAILED: 'text-bg-warning',
+  }[status] || 'text-bg-secondary'
+}
+
+function notificationStatusLabel(status) {
+  return {
+    SENT: 'Enviado',
+    PREPARED: 'Preparado',
+    FAILED: 'Fallido',
+  }[status] || status || 'Sin estado'
+}
+
+function notificationChannelLabel(channel) {
+  return {
+    EMAIL: 'Correo electrónico',
+    WHATSAPP: 'WhatsApp',
+  }[channel] || channel || 'Sin canal'
 }
 
 function buildListUrl() {
@@ -263,6 +295,7 @@ async function selectConversation(conversation) {
   selectedConversation.value = null
   messageBody.value = ''
   conversationError.value = ''
+  notificationFeedback.value = null
 
   await loadConversation(conversation.id)
   await loadConversations({ silent: true })
@@ -283,6 +316,7 @@ async function sendMessage() {
 
   sendingMessage.value = true
   conversationError.value = ''
+  notificationFeedback.value = null
 
   try {
     const response = await authenticatedFetch(
@@ -320,6 +354,8 @@ async function sendMessage() {
     }
 
     selectedConversation.value = data
+    notificationFeedback.value =
+      data?.notification_result || null
     messageBody.value = ''
 
     scrollMessagesToBottom()
@@ -794,6 +830,69 @@ onBeforeUnmount(() => {
             </div>
 
             <div
+              v-if="notificationFeedback"
+              class="alert py-2 small mx-3 mt-3 mb-0"
+              :class="
+                notificationAlertClass(
+                  notificationFeedback.status,
+                )
+              "
+              role="status"
+            >
+              <div
+                class="d-flex flex-wrap justify-content-between align-items-start gap-2"
+              >
+                <div>
+                  <div class="fw-semibold">
+                    Respuesta guardada correctamente
+                  </div>
+
+                  <div class="mt-1">
+                    {{
+                      notificationFeedback.detail ||
+                      (
+                        notificationFeedback.status === 'SENT'
+                          ? 'El aviso al cliente fue enviado.'
+                          : notificationFeedback.status === 'PREPARED'
+                            ? 'El aviso al cliente quedó preparado.'
+                            : 'No fue posible notificar al cliente.'
+                      )
+                    }}
+                  </div>
+
+                  <div
+                    v-if="notificationFeedback.channel"
+                    class="mt-1"
+                  >
+                    Canal:
+                    <strong>
+                      {{
+                        notificationFeedback.channel_display ||
+                        notificationChannelLabel(
+                          notificationFeedback.channel,
+                        )
+                      }}
+                    </strong>
+                  </div>
+                </div>
+
+                <a
+                  v-if="
+                    notificationFeedback.status === 'PREPARED' &&
+                    notificationFeedback.action_url
+                  "
+                  :href="notificationFeedback.action_url"
+                  class="btn btn-sm btn-success"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <i class="bi bi-whatsapp me-1"></i>
+                  Abrir WhatsApp
+                </a>
+              </div>
+            </div>
+
+            <div
               ref="messagesContainer"
               class="chat-messages"
             >
@@ -856,6 +955,103 @@ onBeforeUnmount(() => {
                         : 'Enviado'
                     }}
                   </div>
+                </div>
+              </div>
+            </div>
+
+            <div
+              v-if="selectedConversation.notifications?.length"
+              class="chat-notifications"
+            >
+              <div class="chat-notifications-header">
+                <div>
+                  <div class="fw-semibold">
+                    Historial de notificaciones
+                  </div>
+
+                  <div class="small text-muted">
+                    Avisos generados por respuestas de Martini Cell.
+                  </div>
+                </div>
+
+                <span class="badge text-bg-light">
+                  {{ selectedConversation.notifications.length }}
+                </span>
+              </div>
+
+              <div class="chat-notification-list">
+                <div
+                  v-for="notification in selectedConversation.notifications"
+                  :key="notification.id"
+                  class="chat-notification-item"
+                >
+                  <div
+                    class="d-flex flex-wrap justify-content-between align-items-start gap-2"
+                  >
+                    <div>
+                      <div class="fw-semibold">
+                        {{
+                          notification.channel_display ||
+                          notificationChannelLabel(
+                            notification.channel,
+                          )
+                        }}
+                      </div>
+
+                      <div class="small text-muted">
+                        {{ formatDate(notification.created_at) }}
+                        <span
+                          v-if="notification.triggered_by_username"
+                        >
+                          · {{ notification.triggered_by_username }}
+                        </span>
+                      </div>
+                    </div>
+
+                    <span
+                      class="badge"
+                      :class="
+                        notificationBadgeClass(
+                          notification.status,
+                        )
+                      "
+                    >
+                      {{
+                        notification.status_display ||
+                        notificationStatusLabel(
+                          notification.status,
+                        )
+                      }}
+                    </span>
+                  </div>
+
+                  <div
+                    v-if="notification.detail"
+                    class="small mt-2"
+                  >
+                    {{ notification.detail }}
+                  </div>
+
+                  <div
+                    v-if="notification.destination"
+                    class="small text-muted mt-1"
+                  >
+                    Destino: {{ notification.destination }}
+                  </div>
+
+                  <a
+                    v-if="
+                      notification.status === 'PREPARED' &&
+                      notification.action_url
+                    "
+                    :href="notification.action_url"
+                    class="btn btn-sm btn-outline-success mt-2"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <i class="bi bi-whatsapp me-1"></i>
+                    Abrir WhatsApp
+                  </a>
                 </div>
               </div>
             </div>
@@ -1123,6 +1319,34 @@ onBeforeUnmount(() => {
   color: rgba(255, 255, 255, 0.82);
   font-size: 0.7rem;
   text-align: right;
+}
+
+.chat-notifications {
+  border-top: 1px solid #e2e8ee;
+  background: #ffffff;
+}
+
+.chat-notifications-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid #edf1f4;
+}
+
+.chat-notification-list {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.chat-notification-item {
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid #edf1f4;
+}
+
+.chat-notification-item:last-child {
+  border-bottom: 0;
 }
 
 .chat-composer {

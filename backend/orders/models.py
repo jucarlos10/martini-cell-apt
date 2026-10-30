@@ -444,6 +444,138 @@ class OrderChatMessage(models.Model):
         )
 
 
+
+# HU-36: notificaciones al cliente originadas por respuestas del chat.
+class OrderChatNotification(models.Model):
+    class Status(models.TextChoices):
+        SENT = "SENT", "Enviado"
+        PREPARED = "PREPARED", "Preparado para envío"
+        FAILED = "FAILED", "Fallido"
+
+    order = models.ForeignKey(
+        ServiceOrder,
+        on_delete=models.PROTECT,
+        related_name="chat_notifications",
+    )
+
+    conversation = models.ForeignKey(
+        OrderChatConversation,
+        on_delete=models.PROTECT,
+        related_name="notifications",
+    )
+
+    message = models.ForeignKey(
+        OrderChatMessage,
+        on_delete=models.PROTECT,
+        related_name="notifications",
+    )
+
+    channel = models.CharField(
+        max_length=10,
+        choices=ServiceOrder.NotificationChannel.choices,
+    )
+
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+    )
+
+    # Correo o teléfono utilizado para el aviso.
+    destination = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    # Para WhatsApp conserva el mensaje preparado y el enlace wa.me.
+    # En correo normalmente ambos campos quedan vacíos.
+    prepared_message = models.TextField(
+        blank=True,
+    )
+
+    action_url = models.URLField(
+        max_length=1000,
+        blank=True,
+    )
+
+    # Resultado o detalle técnico del intento de notificación.
+    detail = models.TextField(
+        blank=True,
+    )
+
+    triggered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_chat_notifications_triggered",
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["message", "channel"],
+                name="unique_chat_notification_message_channel",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["order", "created_at"],
+                name="chat_notif_order_created_idx",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+
+        if self.message_id:
+            if (
+                self.message.sender_type
+                != OrderChatMessage.SenderType.STAFF
+            ):
+                raise ValidationError({
+                    "message": (
+                        "Solo una respuesta de Martini Cell puede "
+                        "originar una notificación al cliente."
+                    )
+                })
+
+            if (
+                self.conversation_id
+                and self.message.conversation_id
+                != self.conversation_id
+            ):
+                raise ValidationError({
+                    "conversation": (
+                        "La conversación indicada no corresponde "
+                        "al mensaje seleccionado."
+                    )
+                })
+
+        if self.conversation_id and self.order_id:
+            if self.conversation.order_id != self.order_id:
+                raise ValidationError({
+                    "order": (
+                        "La orden indicada no corresponde "
+                        "a la conversación seleccionada."
+                    )
+                })
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"{self.order.tracking_code} - "
+            f"{self.get_channel_display()} - "
+            f"{self.get_status_display()}"
+        )
+
 def order_evidence_upload_path(instance, filename):
     extension = Path(filename).suffix.lower()
 
