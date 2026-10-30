@@ -1,9 +1,12 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 
 import AdminLayout from '../layouts/AdminLayout.vue'
 import PageHeader from '../components/PageHeader.vue'
 import { authenticatedFetch, getCurrentUser } from '../services/auth'
+
+const route = useRoute()
 
 const clients = ref([])
 const selectedId = ref(null)
@@ -22,6 +25,12 @@ const success = ref('')
 const history = ref([])
 const historyLoading = ref(false)
 const historyError = ref('')
+const loyaltyReviews = ref([])
+const loyaltyBenefit = ref('')
+const loyaltyLoading = ref(false)
+const loyaltyError = ref('')
+const reviewingLoyalty = ref(false)
+let loyaltyRequestId = 0
 
 // HU-05: equipos reales asociados a cada cliente.
 const equipment = ref([])
@@ -47,6 +56,7 @@ const actionError = ref('')
 const isBusy = computed(() =>
   saving.value ||
   savingEquipment.value ||
+  reviewingLoyalty.value ||
   deletingClientId.value !== null ||
   deletingEquipmentId.value !== null
 )
@@ -253,6 +263,11 @@ async function loadClients() {
       ? data
       : data.results || []
 
+    const requestedId = Number(route.query.cliente)
+    if (requestedId && clients.value.some((client) => client.id === requestedId)) {
+      selectedId.value = requestedId
+    }
+
     if (
       !clients.value.some(
         (client) => client.id === selectedId.value
@@ -270,6 +285,57 @@ async function loadClients() {
 
   } finally {
     loading.value = false
+  }
+}
+
+async function loadLoyaltyReviews(clientId) {
+  const requestId = ++loyaltyRequestId
+  loyaltyReviews.value = []
+  loyaltyError.value = ''
+  if (!clientId || !isAdmin.value) return
+
+  loyaltyLoading.value = true
+  try {
+    const response = await authenticatedFetch(`/api/clients/${clientId}/loyalty/`)
+    if (!response.ok) throw new Error('No se pudo cargar el registro de beneficios.')
+    const data = await response.json()
+    if (requestId === loyaltyRequestId) loyaltyReviews.value = data
+  } catch (err) {
+    if (requestId === loyaltyRequestId) loyaltyError.value = err.message
+  } finally {
+    if (requestId === loyaltyRequestId) loyaltyLoading.value = false
+  }
+}
+
+async function reviewLoyalty() {
+  const client = selectedClient.value
+  const benefit = loyaltyBenefit.value.trim()
+  if (!isAdmin.value || !client?.loyalty_pending_milestone || reviewingLoyalty.value) return
+  if (!benefit) {
+    loyaltyError.value = 'Escribe qué beneficio de prueba se registró.'
+    return
+  }
+
+  reviewingLoyalty.value = true
+  loyaltyError.value = ''
+  try {
+    const response = await authenticatedFetch(`/api/clients/${client.id}/loyalty/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ benefit_applied: benefit }),
+    })
+    if (!response.ok) {
+      const data = await response.json().catch(() => null)
+      throw new Error(formatApiErrors(data))
+    }
+    loyaltyBenefit.value = ''
+    await loadClients()
+    await loadLoyaltyReviews(client.id)
+    success.value = `Beneficio de prueba registrado; el próximo ciclo comienza con una meta de ${client.loyalty_cycle_target === 6 ? 5 : 4} ingresos.`
+  } catch (err) {
+    loyaltyError.value = err.message || 'No fue posible registrar la decisión.'
+  } finally {
+    reviewingLoyalty.value = false
   }
 }
 
@@ -490,6 +556,14 @@ async function createEquipment() {
 // Al seleccionar otro cliente, recargar historial y cerrar el formulario
 // anterior para no asociar un equipo a un cliente equivocado.
 watch(selectedId, loadHistory)
+watch(selectedId, (clientId) => {
+  loyaltyBenefit.value = ''
+  loadLoyaltyReviews(clientId)
+})
+watch(() => route.query.cliente, (id) => {
+  const requestedId = Number(id)
+  if (clients.value.some((client) => client.id === requestedId)) selectedId.value = requestedId
+})
 watch(selectedId, () => {
   clearEquipmentHistory()
   showEquipmentForm.value = false
@@ -943,6 +1017,9 @@ onMounted(() => {
               <div class="small">
                 {{ client.phone }}
               </div>
+              <div v-if="client.loyalty_pending_milestone" class="badge text-bg-warning mt-1">
+                Revisar beneficio: {{ client.loyalty_cycle_target }} ingresos
+              </div>
             </button>
 
             <div
@@ -1017,6 +1094,60 @@ onMounted(() => {
                 ? 'Activo'
                 : 'Inactivo'
             }}
+          </div>
+
+          <div class="alert alert-info mt-3 mb-0">
+            <strong>Contador de beneficios:</strong>
+            {{ selectedClient.loyalty_cycle_visits }} / {{ selectedClient.loyalty_cycle_target }}
+            ingresos en este ciclo.
+            <template v-if="selectedClient.loyalty_pending_milestone">
+              <div class="mt-1">
+                Beneficio por {{ selectedClient.loyalty_cycle_target }} ingresos
+                pendiente de revisión en esta versión de prueba.
+                Después de registrarlo, el siguiente ciclo requerirá
+                {{ selectedClient.loyalty_cycle_target === 6 ? 5 : 4 }} ingresos.
+              </div>
+            </template>
+            <template v-else-if="!selectedClient.rut">
+              <div class="mt-1">Si el cliente entrega su RUT, se podrá activar el aviso de beneficios.</div>
+            </template>
+            <template v-else>
+              <div class="mt-1">
+                Próximo beneficio al completar {{ selectedClient.loyalty_cycle_target }} ingresos en este ciclo.
+              </div>
+            </template>
+          </div>
+
+          <div v-if="isAdmin" class="mt-3">
+            <form v-if="selectedClient.loyalty_pending_milestone" @submit.prevent="reviewLoyalty">
+              <label for="loyalty-decision" class="form-label">
+                Beneficio de prueba registrado
+              </label>
+              <textarea
+                id="loyalty-decision"
+                v-model="loyaltyBenefit"
+                class="form-control"
+                rows="2"
+                maxlength="1000"
+                required
+                placeholder="Ejemplo: promoción simulada para la demostración"
+                :disabled="reviewingLoyalty"
+              ></textarea>
+              <button type="submit" class="btn btn-outline-primary btn-sm mt-2" :disabled="reviewingLoyalty">
+                {{ reviewingLoyalty ? 'Guardando...' : 'Registrar beneficio de prueba y reiniciar contador' }}
+              </button>
+            </form>
+            <div v-if="loyaltyError" class="alert alert-danger mt-2" role="alert">{{ loyaltyError }}</div>
+            <div v-if="loyaltyLoading" class="small text-muted">Cargando decisiones anteriores...</div>
+            <div v-else-if="loyaltyReviews.length" class="small mt-2">
+              <strong>Beneficios anteriores</strong>
+              <div v-for="review in loyaltyReviews" :key="review.milestone" class="border-bottom py-2">
+                Ciclo de {{ review.cycle_target }} ingresos (total histórico {{ review.milestone }}): {{ review.benefit_applied }}
+                <div class="text-muted">
+                  {{ formatDate(review.reviewed_at) }} · {{ review.reviewed_by_username || 'Administrador' }}
+                </div>
+              </div>
+            </div>
           </div>
 
           <div class="mt-2 small text-muted">

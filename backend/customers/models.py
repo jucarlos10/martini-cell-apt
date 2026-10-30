@@ -68,3 +68,32 @@ class ClientChangeHistory(models.Model):
 
     def __str__(self):
         return f"Cambio cliente {self.client_id} - {self.changed_at}"
+
+
+class ClientLoyaltyReview(models.Model):
+    """Beneficio aplicado al terminar un ciclo de ingresos de un cliente."""
+
+    client = models.ForeignKey(
+        Client,
+        on_delete=models.CASCADE,
+        related_name="loyalty_reviews",
+    )
+    milestone = models.PositiveIntegerField()
+    cycle_target = models.PositiveSmallIntegerField()
+    benefit_applied = models.TextField()
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="loyalty_reviews",
+    )
+    reviewed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-milestone"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["client", "milestone"],
+                name="unique_client_loyalty_milestone",
+            ),
+        ]

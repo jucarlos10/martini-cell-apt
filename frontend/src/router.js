@@ -4,6 +4,7 @@ import { getAuthenticatedUser, closeSession } from './services/auth'
 
 import Login from './views/LoginView.vue'
 import Dashboard from './views/DashboardView.vue'
+import LoyaltyDemo from './views/LoyaltyDemoView.vue'
 import Orders from './views/OrdersView.vue'
 import OrderCreate from './views/OrderCreateView.vue'
 import OrderDetail from './views/OrderDetailView.vue'
@@ -21,6 +22,7 @@ const routes = [
   { path: '/consulta', component: PublicTracking, meta: { public: true } },
 
   { path: '/panel', component: Dashboard },
+  { path: '/demo-beneficios', component: LoyaltyDemo, meta: { admin: true } },
   { path: '/ordenes', component: Orders },
   { path: '/ordenes/nueva', component: OrderCreate },
   { path: '/ordenes/:id', component: OrderDetail },
