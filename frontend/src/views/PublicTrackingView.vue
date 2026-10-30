@@ -6,6 +6,20 @@ const data = ref(null)
 const error = ref('')
 const loading = ref(false)
 
+const chatOpen = ref(false)
+const chatData = ref(null)
+const chatMessage = ref('')
+const chatError = ref('')
+const chatLoading = ref(false)
+const chatSending = ref(false)
+const chatMessagesContainer = ref(null)
+
+const CHAT_POLL_INTERVAL = 5000
+
+let chatController = null
+let chatPollTimer = null
+let chatRequest = 0
+
 const notFoundMessage =
   'No se encontró una orden con ese código. Revísalo e inténtalo nuevamente.'
 
@@ -72,6 +86,8 @@ watch(code, () => {
   data.value = null
   error.value = ''
   loading.value = false
+
+  resetChat()
 })
 
 function formatDate(value) {
@@ -163,9 +179,319 @@ function rejectedDate() {
   return getStatusDate('REJECTED')
 }
 
+function stopChatPolling() {
+  if (chatPollTimer) {
+    window.clearInterval(chatPollTimer)
+    chatPollTimer = null
+  }
+}
+
+function abortChatRequest() {
+  chatRequest += 1
+
+  if (chatController) {
+    chatController.abort()
+    chatController = null
+  }
+}
+
+function resetChat() {
+  stopChatPolling()
+  abortChatRequest()
+
+  chatOpen.value = false
+  chatData.value = null
+  chatMessage.value = ''
+  chatError.value = ''
+  chatLoading.value = false
+  chatSending.value = false
+}
+
+function scrollChatToBottom() {
+  window.requestAnimationFrame(() => {
+    const container = chatMessagesContainer.value
+
+    if (!container) return
+
+    container.scrollTop = container.scrollHeight
+  })
+}
+
+function normalizeChatResponse(result) {
+  if (
+    !result
+    || !Array.isArray(result.messages)
+    || (
+      result.tracking_code
+      && result.tracking_code !== data.value?.tracking_code
+    )
+  ) {
+    return null
+  }
+
+  return {
+    tracking_code:
+      result.tracking_code || data.value?.tracking_code || '',
+    status: result.status ?? null,
+    status_display:
+      result.status_display || 'Sin conversación',
+    created_at: result.created_at ?? null,
+    updated_at: result.updated_at ?? null,
+    messages: result.messages,
+  }
+}
+
+async function loadChat({ silent = false } = {}) {
+  const trackingCode = data.value?.tracking_code
+
+  if (!trackingCode || !chatOpen.value) return
+
+  const requestId = ++chatRequest
+
+  if (chatController) chatController.abort()
+
+  const requestController = new AbortController()
+  chatController = requestController
+
+  if (!silent) {
+    chatLoading.value = true
+    chatError.value = ''
+  }
+
+  try {
+    const response = await fetch(
+      `/api/orders/public/${encodeURIComponent(trackingCode)}/chat/`,
+      {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+        },
+        cache: 'no-store',
+        signal: requestController.signal,
+      },
+    )
+
+    if (
+      requestId !== chatRequest
+      || trackingCode !== data.value?.tracking_code
+      || !chatOpen.value
+    ) {
+      return
+    }
+
+    if (response.status === 404) {
+      chatError.value =
+        'No fue posible encontrar la orden asociada al chat.'
+      stopChatPolling()
+      return
+    }
+
+    if (response.status === 429) {
+      if (!silent) {
+        chatError.value =
+          'Se alcanzó el límite de consultas del chat. Inténtalo más tarde.'
+      }
+      return
+    }
+
+    if (!response.ok) {
+      if (!silent) {
+        chatError.value =
+          'No fue posible cargar la conversación. Inténtalo nuevamente.'
+      }
+      return
+    }
+
+    const result = await response.json()
+    const normalized = normalizeChatResponse(result)
+
+    if (!normalized) {
+      if (!silent) {
+        chatError.value =
+          'No fue posible interpretar la conversación.'
+      }
+      return
+    }
+
+    const previousMessages =
+      chatData.value?.messages || []
+    const previousLastId =
+      previousMessages.length
+        ? previousMessages[previousMessages.length - 1].id
+        : null
+
+    chatData.value = normalized
+
+    const nextLastId =
+      normalized.messages.length
+        ? normalized.messages[normalized.messages.length - 1].id
+        : null
+
+    if (
+      !silent
+      || previousLastId !== nextLastId
+    ) {
+      scrollChatToBottom()
+    }
+  } catch (err) {
+    if (
+      requestId === chatRequest
+      && err?.name !== 'AbortError'
+      && !silent
+    ) {
+      chatError.value =
+        'No fue posible conectar con el chat. Inténtalo nuevamente.'
+    }
+  } finally {
+    if (requestId === chatRequest) {
+      chatLoading.value = false
+      chatController = null
+    }
+  }
+}
+
+function startChatPolling() {
+  stopChatPolling()
+
+  chatPollTimer = window.setInterval(() => {
+    loadChat({ silent: true })
+  }, CHAT_POLL_INTERVAL)
+}
+
+async function openChat() {
+  chatOpen.value = true
+  chatError.value = ''
+
+  await loadChat()
+
+  if (chatOpen.value) {
+    startChatPolling()
+  }
+}
+
+function closeChat() {
+  chatOpen.value = false
+  stopChatPolling()
+  abortChatRequest()
+  chatLoading.value = false
+}
+
+async function toggleChat() {
+  if (chatOpen.value) {
+    closeChat()
+    return
+  }
+
+  await openChat()
+}
+
+async function sendChatMessage() {
+  const trackingCode = data.value?.tracking_code
+  const body = chatMessage.value.trim()
+
+  if (
+    !trackingCode
+    || !body
+    || chatSending.value
+    || chatData.value?.status === 'CLOSED'
+  ) {
+    return
+  }
+
+  chatSending.value = true
+  chatError.value = ''
+
+  stopChatPolling()
+  abortChatRequest()
+
+  try {
+    const response = await fetch(
+      `/api/orders/public/${encodeURIComponent(trackingCode)}/chat/`,
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ body }),
+      },
+    )
+
+    let result = null
+
+    try {
+      result = await response.json()
+    } catch {
+      result = null
+    }
+
+    if (response.status === 409) {
+      chatError.value =
+        result?.detail
+        || 'La conversación está cerrada.'
+      return
+    }
+
+    if (response.status === 429) {
+      chatError.value =
+        'Se alcanzó el límite de mensajes. Inténtalo más tarde.'
+      return
+    }
+
+    if (!response.ok) {
+      const bodyErrors = result?.body
+
+      if (Array.isArray(bodyErrors) && bodyErrors.length) {
+        chatError.value = bodyErrors[0]
+      } else {
+        chatError.value =
+          result?.detail
+          || 'No fue posible enviar el mensaje.'
+      }
+      return
+    }
+
+    const normalized = normalizeChatResponse(result)
+
+    if (!normalized) {
+      chatError.value =
+        'El mensaje fue enviado, pero no fue posible actualizar la conversación.'
+      return
+    }
+
+    chatData.value = normalized
+    chatMessage.value = ''
+    scrollChatToBottom()
+
+    if (!chatPollTimer) {
+      startChatPolling()
+    }
+  } catch {
+    chatError.value =
+      'No fue posible conectar con el chat. Inténtalo nuevamente.'
+  } finally {
+    chatSending.value = false
+
+    if (chatOpen.value && !chatPollTimer) {
+      startChatPolling()
+    }
+  }
+}
+
+function chatStatusClass(status) {
+  if (status === 'NEW') return 'chat-status-new'
+  if (status === 'PENDING') return 'chat-status-pending'
+  if (status === 'ANSWERED') return 'chat-status-answered'
+  if (status === 'CLOSED') return 'chat-status-closed'
+
+  return 'chat-status-empty'
+}
+
 async function search() {
   const normalizedCode = code.value.trim().toUpperCase()
   const requestId = ++currentRequest
+
+  resetChat()
 
   if (controller) controller.abort()
 
@@ -257,6 +583,9 @@ onBeforeUnmount(() => {
   currentRequest += 1
 
   if (controller) controller.abort()
+
+  stopChatPolling()
+  abortChatRequest()
 })
 </script>
 
@@ -481,8 +810,196 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="alert alert-light border small mt-4 mb-0">
-          Para más información, contacta directamente a Martini Cell.
+        <div class="contact-card mt-4">
+          <div
+            class="d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-3"
+          >
+            <div>
+              <div class="fw-semibold">
+                ¿Necesitas hablar con nosotros?
+              </div>
+
+              <div class="small text-muted mt-1">
+                Escríbenos directamente sobre esta orden.
+              </div>
+            </div>
+
+            <button
+              type="button"
+              class="btn btn-outline-primary"
+              :aria-expanded="chatOpen"
+              aria-controls="order-chat-panel"
+              @click="toggleChat"
+            >
+              <i
+                class="bi me-1"
+                :class="chatOpen ? 'bi-x-lg' : 'bi-chat-dots'"
+                aria-hidden="true"
+              ></i>
+              {{ chatOpen ? 'Cerrar chat' : 'Hablar con Martini Cell' }}
+            </button>
+          </div>
+
+          <div
+            v-if="chatOpen"
+            id="order-chat-panel"
+            class="chat-panel mt-3"
+          >
+            <div
+              class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"
+            >
+              <div>
+                <div class="fw-bold">
+                  Chat de la orden
+                </div>
+
+                <div class="small text-muted">
+                  {{ data.tracking_code }}
+                </div>
+              </div>
+
+              <span
+                class="chat-status-badge"
+                :class="chatStatusClass(chatData?.status)"
+              >
+                {{ chatData?.status_display || 'Sin conversación' }}
+              </span>
+            </div>
+
+            <div
+              v-if="chatError"
+              class="alert alert-warning py-2 small"
+              role="alert"
+            >
+              {{ chatError }}
+            </div>
+
+            <div
+              v-if="chatLoading && !chatData"
+              class="chat-loading text-center text-muted"
+            >
+              <span
+                class="spinner-border spinner-border-sm me-2"
+                aria-hidden="true"
+              ></span>
+              Cargando conversación...
+            </div>
+
+            <div
+              v-else
+              ref="chatMessagesContainer"
+              class="chat-messages"
+              aria-live="polite"
+            >
+              <div
+                v-if="!chatData?.messages?.length"
+                class="chat-empty text-center"
+              >
+                <i
+                  class="bi bi-chat-square-text fs-3 d-block mb-2"
+                  aria-hidden="true"
+                ></i>
+
+                <div class="fw-semibold">
+                  Aún no hay mensajes
+                </div>
+
+                <div class="small text-muted mt-1">
+                  Envía tu primera consulta a Martini Cell.
+                </div>
+              </div>
+
+              <div
+                v-for="message in chatData?.messages || []"
+                :key="message.id"
+                class="chat-message-row"
+                :class="
+                  message.sender_type === 'CLIENT'
+                    ? 'chat-message-client'
+                    : 'chat-message-staff'
+                "
+              >
+                <div class="chat-bubble">
+                  <div class="chat-message-sender">
+                    {{ message.sender_name }}
+                  </div>
+
+                  <div class="chat-message-body">
+                    {{ message.body }}
+                  </div>
+
+                  <div class="chat-message-time">
+                    {{ formatDate(message.created_at) }}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div
+              v-if="chatData?.status === 'CLOSED'"
+              class="alert alert-secondary small mt-3 mb-0"
+            >
+              Esta conversación está cerrada. Martini Cell puede
+              reabrirla si necesitas continuar hablando sobre la orden.
+            </div>
+
+            <form
+              v-else
+              class="chat-composer mt-3"
+              @submit.prevent="sendChatMessage"
+            >
+              <label
+                for="chat-message"
+                class="form-label fw-semibold"
+              >
+                Tu mensaje
+              </label>
+
+              <textarea
+                id="chat-message"
+                v-model="chatMessage"
+                class="form-control"
+                rows="3"
+                maxlength="2000"
+                placeholder="Escribe tu consulta..."
+                :disabled="chatSending"
+                required
+              ></textarea>
+
+              <div
+                class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-2"
+              >
+                <span class="small text-muted">
+                  {{ chatMessage.length }}/2000
+                </span>
+
+                <button
+                  type="submit"
+                  class="btn btn-primary"
+                  :disabled="chatSending || !chatMessage.trim()"
+                >
+                  <span
+                    v-if="chatSending"
+                    class="spinner-border spinner-border-sm me-1"
+                    aria-hidden="true"
+                  ></span>
+
+                  <i
+                    v-else
+                    class="bi bi-send me-1"
+                    aria-hidden="true"
+                  ></i>
+
+                  {{ chatSending ? 'Enviando...' : 'Enviar mensaje' }}
+                </button>
+              </div>
+            </form>
+
+            <div class="small text-muted mt-3">
+              La conversación se actualiza automáticamente mientras
+              mantengas este chat abierto.
+            </div>
+          </div>
         </div>
       </section>
 
@@ -614,6 +1131,133 @@ onBeforeUnmount(() => {
   color: #6c757d;
 }
 
+.contact-card {
+  padding: 1rem;
+  border: 1px solid #dbe4ec;
+  border-radius: 0.9rem;
+  background: #ffffff;
+}
+
+.chat-panel {
+  padding-top: 1rem;
+  border-top: 1px solid #e2e8ee;
+}
+
+.chat-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.chat-status-new {
+  background: #cfe2ff;
+  color: #084298;
+}
+
+.chat-status-pending {
+  background: #fff3cd;
+  color: #664d03;
+}
+
+.chat-status-answered {
+  background: #d1e7dd;
+  color: #0f5132;
+}
+
+.chat-status-closed,
+.chat-status-empty {
+  background: #e9ecef;
+  color: #495057;
+}
+
+.chat-loading,
+.chat-empty {
+  padding: 2rem 1rem;
+  border: 1px dashed #ccd6df;
+  border-radius: 0.85rem;
+  background: #f8fbfd;
+}
+
+.chat-messages {
+  max-height: 390px;
+  overflow-y: auto;
+  padding: 0.9rem;
+  border: 1px solid #dbe4ec;
+  border-radius: 0.85rem;
+  background: #f8fbfd;
+}
+
+.chat-message-row {
+  display: flex;
+  margin-bottom: 0.75rem;
+}
+
+.chat-message-row:last-child {
+  margin-bottom: 0;
+}
+
+.chat-message-client {
+  justify-content: flex-end;
+}
+
+.chat-message-staff {
+  justify-content: flex-start;
+}
+
+.chat-bubble {
+  max-width: min(82%, 520px);
+  padding: 0.7rem 0.85rem;
+  border-radius: 0.9rem;
+  box-shadow: 0 1px 2px rgba(24, 39, 56, 0.06);
+}
+
+.chat-message-client .chat-bubble {
+  background: #0d6efd;
+  color: #ffffff;
+  border-bottom-right-radius: 0.3rem;
+}
+
+.chat-message-staff .chat-bubble {
+  background: #ffffff;
+  color: #273849;
+  border: 1px solid #dbe4ec;
+  border-bottom-left-radius: 0.3rem;
+}
+
+.chat-message-sender {
+  margin-bottom: 0.2rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.chat-message-client .chat-message-sender,
+.chat-message-client .chat-message-time {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.chat-message-staff .chat-message-sender,
+.chat-message-staff .chat-message-time {
+  color: #6c757d;
+}
+
+.chat-message-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-message-time {
+  margin-top: 0.35rem;
+  font-size: 0.7rem;
+}
+
+.chat-composer textarea {
+  resize: vertical;
+  min-height: 86px;
+}
+
 @media (max-width: 575.98px) {
   .tracking-step {
     gap: 0.75rem;
@@ -625,6 +1269,15 @@ onBeforeUnmount(() => {
 
   .tracking-state {
     font-size: 0.7rem;
+  }
+
+  .chat-bubble {
+    max-width: 92%;
+  }
+
+  .chat-messages {
+    max-height: 340px;
+    padding: 0.7rem;
   }
 }
 </style>
