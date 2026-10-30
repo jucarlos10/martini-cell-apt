@@ -843,6 +843,121 @@ class OrderStatusHistory(models.Model):
         )
 
 
+# HU-37: notificaciones al cliente originadas por cambios de estado.
+class OrderStatusNotification(models.Model):
+    class Status(models.TextChoices):
+        SENT = "SENT", "Enviado"
+        PREPARED = "PREPARED", "Preparado para envío"
+        FAILED = "FAILED", "Fallido"
+
+    order = models.ForeignKey(
+        ServiceOrder,
+        on_delete=models.PROTECT,
+        related_name="status_notifications",
+    )
+
+    status_history = models.ForeignKey(
+        OrderStatusHistory,
+        on_delete=models.PROTECT,
+        related_name="notifications",
+    )
+
+    channel = models.CharField(
+        max_length=10,
+        choices=ServiceOrder.NotificationChannel.choices,
+    )
+
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+    )
+
+    # Correo o teléfono utilizado para el aviso.
+    destination = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    # Para WhatsApp conserva el mensaje preparado y el enlace wa.me.
+    # En correo normalmente ambos campos quedan vacíos.
+    prepared_message = models.TextField(
+        blank=True,
+    )
+
+    action_url = models.URLField(
+        max_length=1000,
+        blank=True,
+    )
+
+    # Resultado o detalle técnico del intento de notificación.
+    detail = models.TextField(
+        blank=True,
+    )
+
+    triggered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_status_notifications_triggered",
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["status_history", "channel"],
+                name="unique_status_notification_history_channel",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["order", "created_at"],
+                name="status_notif_order_created_idx",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+
+        if self.status_history_id:
+            if (
+                self.order_id
+                and self.status_history.order_id != self.order_id
+            ):
+                raise ValidationError({
+                    "order": (
+                        "La orden indicada no corresponde "
+                        "al cambio de estado seleccionado."
+                    )
+                })
+
+            if not self.status_history.from_status:
+                raise ValidationError({
+                    "status_history": (
+                        "El registro inicial de la orden no puede "
+                        "originar una notificación HU-37."
+                    )
+                })
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"{self.order.tracking_code} - "
+            f"{self.status_history.from_status} → "
+            f"{self.status_history.to_status} - "
+            f"{self.get_channel_display()} - "
+            f"{self.get_status_display()}"
+        )
+
+
 # HU-14: Costos, precios y márgenes de reparación.
 class OrderFinancial(models.Model):
     """

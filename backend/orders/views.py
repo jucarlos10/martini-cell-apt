@@ -35,6 +35,7 @@ from .models import (
     OrderReceptionReceiptDelivery,
     OrderSensitiveChangeHistory,
     OrderStatusHistory,
+    OrderStatusNotification,
     OrderTechnicalReport,
     ServiceOrder,
 )
@@ -48,6 +49,7 @@ from .serializers import (
     OrderReceptionReceiptDeliveryRequestSerializer,
     OrderReceptionReceiptSerializer,
     OrderSensitiveChangeHistorySerializer,
+    OrderStatusNotificationSerializer,
     OrderTechnicalReportHistorySerializer,
     OrderTechnicalReportSerializer,
     ServiceOrderSerializer,
@@ -120,6 +122,11 @@ class OrderStatusHistorySerializer(serializers.ModelSerializer):
 
     changed_by_username = serializers.SerializerMethodField()
 
+    notifications = OrderStatusNotificationSerializer(
+        many=True,
+        read_only=True,
+    )
+
     class Meta:
         model = OrderStatusHistory
         fields = (
@@ -132,6 +139,7 @@ class OrderStatusHistorySerializer(serializers.ModelSerializer):
             "changed_by",
             "changed_by_username",
             "changed_at",
+            "notifications",
         )
 
         read_only_fields = fields
@@ -1393,6 +1401,194 @@ class OrderSensitiveChangeHistoryView(APIView):
         return Response(serializer.data)
 
 
+# HU-37: notificaciones automáticas por cambios de estado de la orden.
+def _status_notification_text(order, status_history):
+    new_status_display = ServiceOrder.Status(
+        status_history.to_status
+    ).label
+
+    return (
+        "Hola. Martini Cell informa que tu orden "
+        f"{order.tracking_code} cambió de estado a "
+        f"\"{new_status_display}\". "
+        "Puedes revisar el seguimiento utilizando el mismo código "
+        "de orden."
+    )
+
+
+def _status_notification_email_body(order, status_history):
+    new_status_display = ServiceOrder.Status(
+        status_history.to_status
+    ).label
+
+    return (
+        "MARTINI CELL\n\n"
+        "El estado de tu orden fue actualizado.\n\n"
+        f"Código de orden y seguimiento: {order.tracking_code}\n"
+        f"Nuevo estado: {new_status_display}\n"
+        f"Consulta: {_public_tracking_url()}\n\n"
+        "Por seguridad, este correo no incluye notas internas, costos "
+        "ni detalles técnicos privados. Ingresa a la consulta pública "
+        "y utiliza el mismo código de seguimiento para revisar el avance.\n"
+    )
+
+
+def _serialize_status_notification(notification):
+    return {
+        "id": notification.id,
+        "status_history": notification.status_history_id,
+        "channel": notification.channel,
+        "channel_display": notification.get_channel_display(),
+        "status": notification.status,
+        "status_display": notification.get_status_display(),
+        "destination": notification.destination,
+        "prepared_message": notification.prepared_message,
+        "action_url": notification.action_url,
+        "detail": notification.detail,
+        "created_at": notification.created_at,
+    }
+
+
+def _notify_status_change(status_history, user):
+    """
+    Procesa la notificación únicamente después de confirmar el cambio
+    de estado y su historial. Un fallo del canal no revierte la transición.
+    """
+    order = status_history.order
+    channel = order.preferred_notification_channel
+
+    if not channel:
+        return {
+            "status": "FAILED",
+            "channel": "",
+            "detail": (
+                "El estado fue actualizado, pero la orden no tiene un "
+                "canal preferido de notificaciones configurado."
+            ),
+        }
+
+    existing = (
+        OrderStatusNotification.objects
+        .filter(
+            status_history=status_history,
+            channel=channel,
+        )
+        .select_related("triggered_by")
+        .first()
+    )
+
+    if existing is not None:
+        result = _serialize_status_notification(existing)
+        result["duplicate_prevented"] = True
+        return result
+
+    common_values = {
+        "order": order,
+        "status_history": status_history,
+        "channel": channel,
+        "triggered_by": user,
+    }
+
+    if channel == ServiceOrder.NotificationChannel.EMAIL:
+        destination = (order.client.email or "").strip()
+
+        if not destination:
+            notification = OrderStatusNotification.objects.create(
+                **common_values,
+                status=OrderStatusNotification.Status.FAILED,
+                destination="",
+                detail=(
+                    "El estado fue actualizado, pero el cliente no tiene "
+                    "un correo electrónico registrado."
+                ),
+            )
+            return _serialize_status_notification(notification)
+
+        try:
+            email = EmailMessage(
+                subject=(
+                    "Martini Cell - Estado actualizado "
+                    f"{order.tracking_code}"
+                ),
+                body=_status_notification_email_body(
+                    order,
+                    status_history,
+                ),
+                to=[destination],
+            )
+            sent_count = email.send(using="default")
+
+            if sent_count != 1:
+                raise RuntimeError(
+                    "El servicio de correo no confirmó el envío."
+                )
+
+        except Exception as error:
+            notification = OrderStatusNotification.objects.create(
+                **common_values,
+                status=OrderStatusNotification.Status.FAILED,
+                destination=destination,
+                detail=str(error)[:1000],
+            )
+            return _serialize_status_notification(notification)
+
+        notification = OrderStatusNotification.objects.create(
+            **common_values,
+            status=OrderStatusNotification.Status.SENT,
+            destination=destination,
+            detail=(
+                "Aviso de cambio de estado enviado por correo electrónico."
+            ),
+        )
+        return _serialize_status_notification(notification)
+
+    if channel == ServiceOrder.NotificationChannel.WHATSAPP:
+        destination = _whatsapp_number(order.client.phone)
+
+        if not destination:
+            notification = OrderStatusNotification.objects.create(
+                **common_values,
+                status=OrderStatusNotification.Status.FAILED,
+                destination="",
+                detail=(
+                    "El estado fue actualizado, pero el cliente no tiene "
+                    "un teléfono registrado para WhatsApp."
+                ),
+            )
+            return _serialize_status_notification(notification)
+
+        prepared_message = _status_notification_text(
+            order,
+            status_history,
+        )
+        action_url = (
+            f"https://wa.me/{destination}"
+            f"?text={quote(prepared_message)}"
+        )
+
+        notification = OrderStatusNotification.objects.create(
+            **common_values,
+            status=OrderStatusNotification.Status.PREPARED,
+            destination=destination,
+            prepared_message=prepared_message,
+            action_url=action_url,
+            detail=(
+                "Aviso de WhatsApp preparado para envío manual. "
+                "El cambio de estado ya quedó guardado."
+            ),
+        )
+        return _serialize_status_notification(notification)
+
+    return {
+        "status": "FAILED",
+        "channel": channel,
+        "detail": (
+            "El estado fue actualizado, pero el canal preferido "
+            "configurado no es compatible."
+        ),
+    }
+
+
 class OrderStatusView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1406,7 +1602,6 @@ class OrderStatusView(APIView):
             get_order_status_data(order)
         )
 
-    @transaction.atomic
     def patch(self, request, pk):
         if request.user.role not in {"ADMIN", "TECH"}:
             return Response(
@@ -1432,53 +1627,63 @@ class OrderStatusView(APIView):
             "",
         )
 
-        # Bloqueamos la orden durante la transición para evitar
-        # que dos solicitudes cambien su estado simultáneamente.
-        order = get_object_or_404(
-            ServiceOrder.objects.select_for_update(),
-            pk=pk,
-        )
-
-        previous_status = order.status
-
-        allowed = STATUS_TRANSITIONS.get(
-            previous_status,
-            (),
-        )
-
-        if new_status not in allowed:
-            return Response(
-                {
-                    "detail": (
-                        "No está permitido cambiar el estado "
-                        f"de {order.get_status_display()} "
-                        f"a {ServiceOrder.Status(new_status).label}."
-                    ),
-                    "current_status": previous_status,
-                    "allowed_transitions": list(allowed),
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+        # Primero se confirman la transición y su historial. La
+        # notificación se procesa fuera de esta transacción para que
+        # un fallo de EMAIL/WhatsApp nunca revierta el nuevo estado.
+        with transaction.atomic():
+            order = get_object_or_404(
+                ServiceOrder.objects
+                .select_for_update()
+                .select_related("client"),
+                pk=pk,
             )
 
-        order.status = new_status
-        order.save(
-            update_fields=[
-                "status",
-                "updated_at",
-            ]
+            previous_status = order.status
+
+            allowed = STATUS_TRANSITIONS.get(
+                previous_status,
+                (),
+            )
+
+            if new_status not in allowed:
+                return Response(
+                    {
+                        "detail": (
+                            "No está permitido cambiar el estado "
+                            f"de {order.get_status_display()} "
+                            f"a {ServiceOrder.Status(new_status).label}."
+                        ),
+                        "current_status": previous_status,
+                        "allowed_transitions": list(allowed),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            order.status = new_status
+            order.save(
+                update_fields=[
+                    "status",
+                    "updated_at",
+                ]
+            )
+
+            status_history = OrderStatusHistory.objects.create(
+                order=order,
+                from_status=previous_status,
+                to_status=new_status,
+                note=note,
+                changed_by=request.user,
+            )
+
+        notification_result = _notify_status_change(
+            status_history,
+            request.user,
         )
 
-        OrderStatusHistory.objects.create(
-            order=order,
-            from_status=previous_status,
-            to_status=new_status,
-            note=note,
-            changed_by=request.user,
-        )
+        response_data = get_order_status_data(order)
+        response_data["notification_result"] = notification_result
 
-        return Response(
-            get_order_status_data(order)
-        )
+        return Response(response_data)
 
 
 class OrderStatusHistoryView(APIView):
@@ -1494,6 +1699,16 @@ class OrderStatusHistoryView(APIView):
             OrderStatusHistory.objects
             .filter(order=order)
             .select_related("changed_by")
+            .prefetch_related(
+                Prefetch(
+                    "notifications",
+                    queryset=(
+                        OrderStatusNotification.objects
+                        .select_related("triggered_by")
+                        .order_by("created_at", "id")
+                    ),
+                )
+            )
             .order_by("changed_at", "id")
         )
 
