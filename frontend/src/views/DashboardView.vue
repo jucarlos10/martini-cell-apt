@@ -12,7 +12,7 @@ const error = ref('')
 
 const open = computed(() =>
   orders.value.filter(
-    (order) => !['CLOSED', 'REJECTED'].includes(order.status)
+    (order) => !['DELIVERED', 'CLOSED', 'REJECTED'].includes(order.status)
   ).length
 )
 

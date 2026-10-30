@@ -68,7 +68,9 @@ class WarrantyRequest(models.Model):
     )
     concurrent_open_reason = models.TextField(blank=True)
     client_name_snapshot = models.CharField(max_length=150, editable=False)
-    client_rut_snapshot = models.CharField(max_length=20, editable=False)
+    client_rut_snapshot = models.CharField(
+        max_length=20, blank=True, editable=False,
+    )
     evidence = models.ImageField(
         upload_to=warranty_request_evidence_upload_path,
         validators=[
@@ -166,7 +168,7 @@ class WarrantyRequest(models.Model):
                 self.client_name_snapshot = self.order.client.name
 
             if not self.client_rut_snapshot:
-                self.client_rut_snapshot = self.order.client.rut
+                self.client_rut_snapshot = self.order.client.rut or ""
 
         if self.created_by_id and not self.created_by_username:
             self.created_by_username = self.created_by.get_username()

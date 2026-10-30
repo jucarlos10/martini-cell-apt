@@ -3,8 +3,10 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 import AdminLayout from '../layouts/AdminLayout.vue'
+import IntakeReceipt from '../components/IntakeReceipt.vue'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
+import TrackingShare from '../components/TrackingShare.vue'
 import { authenticatedFetch, getCurrentUser } from '../services/auth'
 
 const route = useRoute()
@@ -54,6 +56,7 @@ const emptySensitiveOrderForm = () => ({
   equipment: '',
   reported_issue: '',
   initial_observations: '',
+  intake_price: '',
   change_reason: '',
 })
 const sensitiveOrderForm = ref(emptySensitiveOrderForm())
@@ -77,6 +80,17 @@ const sensitiveRelationChanged = computed(() =>
   Number(sensitiveOrderForm.value.equipment) !== Number(order.value?.equipment)
 )
 
+const sensitivePriceChanged = computed(() => {
+  const edited = String(sensitiveOrderForm.value.intake_price ?? '').trim()
+  const current = order.value?.intake_price
+  if (current === null || current === undefined || current === '') return edited !== ''
+  return edited === '' || Number(edited) !== Number(current)
+})
+
+const sensitiveReasonRequired = computed(() =>
+  sensitiveRelationChanged.value || sensitivePriceChanged.value
+)
+
 function syncSensitiveOrderForm() {
   if (!order.value) {
     sensitiveOrderForm.value = emptySensitiveOrderForm()
@@ -88,6 +102,7 @@ function syncSensitiveOrderForm() {
     equipment: order.value.equipment ?? '',
     reported_issue: order.value.reported_issue ?? '',
     initial_observations: order.value.initial_observations ?? '',
+    intake_price: order.value.intake_price ?? '',
     change_reason: '',
   }
 }
@@ -262,6 +277,7 @@ async function saveSensitiveOrder() {
   const initialObservations = String(
     sensitiveOrderForm.value.initial_observations ?? ''
   ).trim()
+  const intakePrice = String(sensitiveOrderForm.value.intake_price ?? '').trim()
   const changeReason = String(
     sensitiveOrderForm.value.change_reason ?? ''
   ).trim()
@@ -286,9 +302,14 @@ async function saveSensitiveOrder() {
     return
   }
 
-  if (sensitiveRelationChanged.value && !changeReason) {
+  if (intakePrice !== '' && !/^\d{1,10}$/.test(intakePrice)) {
+    sensitiveFormError.value = 'Ingresa un precio en pesos sin decimales o déjalo por confirmar.'
+    return
+  }
+
+  if (sensitiveReasonRequired.value && !changeReason) {
     sensitiveFormError.value =
-      'Debes indicar el motivo al cambiar el cliente o el equipo.'
+      'Debes indicar el motivo al cambiar el cliente, el equipo o el precio de ingreso.'
     return
   }
 
@@ -305,6 +326,7 @@ async function saveSensitiveOrder() {
         equipment: equipmentId,
         reported_issue: reportedIssue,
         initial_observations: initialObservations,
+        intake_price: intakePrice === '' ? null : intakePrice,
         change_reason: changeReason,
       }),
     })
@@ -3447,9 +3469,12 @@ watch(() => route.params.id, loadOrder, { immediate: true })
         </template>
 
         <template #actions>
-          <router-link to="/ordenes" class="btn btn-outline-secondary">
-            Volver a órdenes
-          </router-link>
+          <div class="d-flex flex-wrap gap-2">
+            <IntakeReceipt :order="order" />
+            <router-link to="/ordenes" class="btn btn-outline-secondary">
+              Volver a órdenes
+            </router-link>
+          </div>
         </template>
       </PageHeader>
 
@@ -3470,6 +3495,9 @@ watch(() => route.params.id, loadOrder, { immediate: true })
 
       <!-- RESUMEN: información real de la orden y sus tiempos -->
       <section v-if="tab === 'resumen'" class="row g-3">
+        <div class="col-12">
+          <TrackingShare :tracking-code="order.tracking_code" />
+        </div>
         <div class="col-lg-8">
           <div class="mc-card p-4 h-100">
             <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
@@ -3533,7 +3561,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                       :key="client.id"
                       :value="client.id"
                     >
-                      {{ client.name }} · {{ client.rut }}
+                      {{ client.name }} · {{ client.rut || 'Sin RUT' }}
                     </option>
                   </select>
                 </div>
@@ -3585,10 +3613,29 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                   ></textarea>
                 </div>
 
+                <div class="col-md-6">
+                  <label for="sensitive-intake-price" class="form-label">
+                    Precio informado al ingreso (CLP)
+                  </label>
+                  <input
+                    id="sensitive-intake-price"
+                    v-model="sensitiveOrderForm.intake_price"
+                    class="form-control"
+                    type="number"
+                    inputmode="numeric"
+                    min="0"
+                    max="9999999999"
+                    step="1"
+                    :disabled="sensitiveSaving"
+                    placeholder="Por confirmar"
+                  >
+                  <div class="form-text">Se conserva el cambio en el historial de la orden.</div>
+                </div>
+
                 <div class="col-12">
                   <label for="sensitive-change-reason" class="form-label">
                     Motivo del cambio
-                    <span v-if="sensitiveRelationChanged" class="text-danger">*</span>
+                    <span v-if="sensitiveReasonRequired" class="text-danger">*</span>
                   </label>
                   <textarea
                     id="sensitive-change-reason"
@@ -3596,8 +3643,8 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                     class="form-control"
                     rows="2"
                     :disabled="sensitiveSaving"
-                    :required="sensitiveRelationChanged"
-                    placeholder="Obligatorio si cambias el cliente o el equipo."
+                    :required="sensitiveReasonRequired"
+                    placeholder="Obligatorio si cambias el cliente, el equipo o el precio de ingreso."
                   ></textarea>
                   <div class="form-text">
                     Para cambios solo de falla u observaciones, el motivo es opcional.
@@ -3645,13 +3692,18 @@ watch(() => route.params.id, loadOrder, { immediate: true })
               </div>
 
               <div class="col-md-6">
-                <div class="mc-muted small">Falla reportada</div>
+                <div class="mc-muted small">Falla informada por el cliente</div>
                 <div>{{ order.reported_issue }}</div>
               </div>
 
               <div class="col-md-6">
                 <div class="mc-muted small">Observaciones iniciales</div>
                 <div>{{ order.initial_observations || 'Sin observaciones adicionales' }}</div>
+              </div>
+
+              <div class="col-md-6">
+                <div class="mc-muted small">Precio informado al ingreso</div>
+                <div>{{ order.intake_price == null ? 'Por confirmar' : formatMoney(order.intake_price) }}</div>
               </div>
 
               <div class="col-md-6">
@@ -3665,7 +3717,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
               </div>
 
               <div class="col-md-6">
-                <div class="mc-muted small">Diagnóstico actual</div>
+                <div class="mc-muted small">Diagnóstico técnico definitivo</div>
                 <div>{{ technicalReport?.diagnosis || (reportError || 'Pendiente') }}</div>
               </div>
 
@@ -3843,15 +3895,19 @@ watch(() => route.params.id, loadOrder, { immediate: true })
               </div>
               <div v-else class="mb-3"></div>
 
-              <label for="report-diagnosis" class="form-label">Diagnóstico definitivo</label>
+              <label for="report-diagnosis" class="form-label">Diagnóstico técnico definitivo</label>
               <textarea
                 id="report-diagnosis"
                 v-model="reportForm.diagnosis"
-                class="form-control mb-3"
+                class="form-control"
                 rows="3"
                 :disabled="reportSaving"
                 required
               ></textarea>
+              <div class="form-text mb-3">
+                Describe la causa identificada por el técnico. La falla informada
+                al ingreso y el resultado del servicio se registran por separado.
+              </div>
 
               <label for="report-actions" class="form-label">Acciones de reparación</label>
               <textarea
@@ -3882,7 +3938,8 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                 placeholder="Si no se utilizaron repuestos, deja este campo vacío."
               ></textarea>
               <div class="form-text mb-3">
-                La vinculación con catálogo y proveedores se integrará en HU-13.
+                Si utilizaste repuestos del catálogo, regístralos también en
+                Repuestos y costos para actualizar el stock y los costos de la orden.
               </div>
 
               <label for="report-result" class="form-label">Resultado del servicio</label>
@@ -3922,7 +3979,7 @@ watch(() => route.params.id, loadOrder, { immediate: true })
 
             <div v-if="technicalReport && (!canEditReport || ['DELIVERED', 'CLOSED'].includes(order.status))" class="mt-3">
               <div class="mb-2"><strong>Técnico:</strong> {{ technicalReport.technician_username }}</div>
-              <div class="mb-2"><strong>Diagnóstico:</strong> {{ technicalReport.diagnosis }}</div>
+              <div class="mb-2"><strong>Diagnóstico técnico:</strong> {{ technicalReport.diagnosis }}</div>
               <div class="mb-2"><strong>Reparación:</strong> {{ technicalReport.repair_actions }}</div>
               <div class="mb-2"><strong>Observaciones:</strong> {{ technicalReport.repair_observations || 'Sin observaciones' }}</div>
               <div class="mb-2"><strong>Repuestos:</strong> {{ technicalReport.parts_description || 'Sin repuestos descritos' }}</div>

@@ -234,6 +234,17 @@ class WarrantyRequestTests(APITestCase):
             self.admin.username,
         )
 
+    def test_request_for_client_without_rut_keeps_an_empty_snapshot(self):
+        self.customer.rut = None
+        self.customer.save(update_fields=["rut"])
+
+        response = self.create_request()
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        request = WarrantyRequest.objects.get()
+        self.assertEqual(request.client_rut_snapshot, "")
+        self.assertEqual(response.data["client_rut"], "")
+
     def test_expired_warranty_allows_request_with_warning(self):
         expired = self.create_warranty(
             order=self.other_order,

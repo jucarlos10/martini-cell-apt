@@ -153,6 +153,50 @@ class ClientManagementTests(APITestCase):
             self.technician,
         )
 
+    def test_clients_without_rut_can_be_registered_separately(self):
+        first = self.client.post(
+            self.list_url,
+            {"name": "Cliente sin RUT uno", "phone": "934567890"},
+            format="json",
+        )
+        second = self.client.post(
+            self.list_url,
+            {"rut": "", "name": "Cliente sin RUT dos", "phone": "945678901"},
+            format="json",
+        )
+
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(second.status_code, status.HTTP_201_CREATED)
+        self.assertIsNone(first.data["rut"])
+        self.assertIsNone(second.data["rut"])
+        self.assertNotEqual(first.data["id"], second.data["id"])
+        self.assertEqual(
+            Client.objects.filter(rut__isnull=True).count(),
+            2,
+        )
+
+        search = self.client.get(self.list_url, {"search": "934567890"})
+        self.assertEqual(search.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(search.data), 1)
+        self.assertEqual(search.data[0]["id"], first.data["id"])
+
+    def test_rut_can_be_removed_with_change_history(self):
+        response = self.client.patch(
+            self.detail_url(self.customer),
+            {"rut": ""},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data["rut"])
+        self.customer.refresh_from_db()
+        self.assertIsNone(self.customer.rut)
+        history = ClientChangeHistory.objects.get(client=self.customer)
+        self.assertEqual(history.changes["rut"], {
+            "from": "123456785",
+            "to": None,
+        })
+
     def test_missing_required_name_is_rejected(self):
         payload = self.create_payload()
         payload.pop("name")
