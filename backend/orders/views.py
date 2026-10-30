@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
+from django.conf import settings
 from django.core.mail import EmailMessage
 from django.db import transaction
 from django.db.models import Count, Prefetch, Q
@@ -28,6 +29,7 @@ from accounts.permissions import (
 from .models import (
     OrderChatConversation,
     OrderChatMessage,
+    OrderChatNotification,
     OrderEvidence,
     OrderReceptionReceipt,
     OrderReceptionReceiptDelivery,
@@ -702,6 +704,197 @@ class OrderReceptionReceiptDeliveryView(APIView):
 
 
 
+# HU-36: notificación al cliente cuando Martini Cell responde el chat.
+def _public_tracking_url():
+    configured_url = getattr(
+        settings,
+        "FRONTEND_PUBLIC_URL",
+        "",
+    ).strip()
+
+    if configured_url:
+        base_url = configured_url.rstrip("/")
+    elif settings.DEBUG:
+        base_url = "http://localhost:5173"
+    else:
+        base_url = "https://martini-cell-frontend.vercel.app"
+
+    return f"{base_url}/consulta"
+
+
+def _chat_notification_text(order):
+    return (
+        "Hola. Martini Cell tiene una nueva respuesta para tu orden "
+        f"{order.tracking_code}. "
+        "Puedes revisarla desde la consulta pública usando el mismo "
+        "código de seguimiento."
+    )
+
+
+def _chat_notification_email_body(order):
+    return (
+        "MARTINI CELL\n\n"
+        "Tienes una nueva respuesta en el chat de tu orden.\n\n"
+        f"Código de orden y seguimiento: {order.tracking_code}\n"
+        f"Consulta: {_public_tracking_url()}\n\n"
+        "Por seguridad, este correo no incluye el contenido del mensaje. "
+        "Ingresa a la consulta pública y utiliza tu código de seguimiento "
+        "para revisar la conversación.\n"
+    )
+
+
+def _serialize_chat_notification(notification):
+    return {
+        "id": notification.id,
+        "message": notification.message_id,
+        "channel": notification.channel,
+        "channel_display": notification.get_channel_display(),
+        "status": notification.status,
+        "status_display": notification.get_status_display(),
+        "destination": notification.destination,
+        "prepared_message": notification.prepared_message,
+        "action_url": notification.action_url,
+        "detail": notification.detail,
+        "created_at": notification.created_at,
+    }
+
+
+def _notify_chat_reply(message, user):
+    """
+    Procesa la notificación después de que la respuesta del chat ya fue
+    confirmada en base de datos. Nunca debe borrar ni revertir el mensaje.
+    """
+    conversation = message.conversation
+    order = conversation.order
+    channel = order.preferred_notification_channel
+
+    if not channel:
+        return {
+            "status": "FAILED",
+            "channel": "",
+            "detail": (
+                "La respuesta fue guardada, pero la orden no tiene un "
+                "canal preferido de notificaciones configurado."
+            ),
+        }
+
+    existing = (
+        OrderChatNotification.objects
+        .filter(
+            message=message,
+            channel=channel,
+        )
+        .select_related("triggered_by")
+        .first()
+    )
+
+    if existing is not None:
+        result = _serialize_chat_notification(existing)
+        result["duplicate_prevented"] = True
+        return result
+
+    common_values = {
+        "order": order,
+        "conversation": conversation,
+        "message": message,
+        "channel": channel,
+        "triggered_by": user,
+    }
+
+    if channel == ServiceOrder.NotificationChannel.EMAIL:
+        destination = (order.client.email or "").strip()
+
+        if not destination:
+            notification = OrderChatNotification.objects.create(
+                **common_values,
+                status=OrderChatNotification.Status.FAILED,
+                destination="",
+                detail=(
+                    "La respuesta fue guardada, pero el cliente no tiene "
+                    "un correo electrónico registrado."
+                ),
+            )
+            return _serialize_chat_notification(notification)
+
+        try:
+            email = EmailMessage(
+                subject=(
+                    "Martini Cell - Nueva respuesta "
+                    f"{order.tracking_code}"
+                ),
+                body=_chat_notification_email_body(order),
+                to=[destination],
+            )
+            sent_count = email.send(using="default")
+
+            if sent_count != 1:
+                raise RuntimeError(
+                    "El servicio de correo no confirmó el envío."
+                )
+
+        except Exception as error:
+            notification = OrderChatNotification.objects.create(
+                **common_values,
+                status=OrderChatNotification.Status.FAILED,
+                destination=destination,
+                detail=str(error)[:1000],
+            )
+            return _serialize_chat_notification(notification)
+
+        notification = OrderChatNotification.objects.create(
+            **common_values,
+            status=OrderChatNotification.Status.SENT,
+            destination=destination,
+            detail=(
+                "Aviso de nueva respuesta enviado por correo electrónico."
+            ),
+        )
+        return _serialize_chat_notification(notification)
+
+    if channel == ServiceOrder.NotificationChannel.WHATSAPP:
+        destination = _whatsapp_number(order.client.phone)
+
+        if not destination:
+            notification = OrderChatNotification.objects.create(
+                **common_values,
+                status=OrderChatNotification.Status.FAILED,
+                destination="",
+                detail=(
+                    "La respuesta fue guardada, pero el cliente no tiene "
+                    "un teléfono registrado para WhatsApp."
+                ),
+            )
+            return _serialize_chat_notification(notification)
+
+        prepared_message = _chat_notification_text(order)
+        action_url = (
+            f"https://wa.me/{destination}"
+            f"?text={quote(prepared_message)}"
+        )
+
+        notification = OrderChatNotification.objects.create(
+            **common_values,
+            status=OrderChatNotification.Status.PREPARED,
+            destination=destination,
+            prepared_message=prepared_message,
+            action_url=action_url,
+            detail=(
+                "Aviso de WhatsApp preparado para envío manual. "
+                "La respuesta del chat ya quedó guardada."
+            ),
+        )
+        return _serialize_chat_notification(notification)
+
+    return {
+        "status": "FAILED",
+        "channel": channel,
+        "detail": (
+            "La respuesta fue guardada, pero el canal preferido "
+            "configurado no es compatible."
+        ),
+    }
+
+
 # HU-35: chat público e interno asociado a una orden.
 def _chat_conversation_queryset():
     return (
@@ -999,63 +1192,79 @@ class OrderChatConversationDetailView(APIView):
             ).data
         )
 
-    @transaction.atomic
     def post(self, request, pk):
         request_serializer = OrderChatMessageCreateSerializer(
             data=request.data
         )
         request_serializer.is_valid(raise_exception=True)
 
-        conversation = get_object_or_404(
-            OrderChatConversation.objects
-            .select_for_update()
-            .select_related("order"),
-            pk=pk,
-        )
-
-        if (
-            conversation.status
-            == OrderChatConversation.Status.CLOSED
-        ):
-            return Response(
-                {
-                    "detail": (
-                        "La conversación está cerrada. "
-                        "Reábrela antes de responder."
-                    )
-                },
-                status=status.HTTP_409_CONFLICT,
+        # La respuesta y el estado del chat se confirman primero.
+        # La notificación se procesa después para que un fallo del canal
+        # nunca revierta ni elimine el mensaje ya enviado.
+        with transaction.atomic():
+            conversation = get_object_or_404(
+                OrderChatConversation.objects
+                .select_for_update()
+                .select_related(
+                    "order",
+                    "order__client",
+                ),
+                pk=pk,
             )
 
-        # Al responder, todo lo que estaba pendiente del cliente
-        # queda leído por el personal que está atendiendo el chat.
-        _mark_chat_read_by_staff(conversation)
+            if (
+                conversation.status
+                == OrderChatConversation.Status.CLOSED
+            ):
+                return Response(
+                    {
+                        "detail": (
+                            "La conversación está cerrada. "
+                            "Reábrela antes de responder."
+                        )
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
 
-        OrderChatMessage.objects.create(
-            conversation=conversation,
-            sender_type=OrderChatMessage.SenderType.STAFF,
-            sender_user=request.user,
-            body=request_serializer.validated_data["body"],
-        )
+            # Al responder, todo lo que estaba pendiente del cliente
+            # queda leído por el personal que está atendiendo el chat.
+            _mark_chat_read_by_staff(conversation)
 
-        conversation.status = (
-            OrderChatConversation.Status.ANSWERED
-        )
-        conversation.save(
-            update_fields=[
-                "status",
-                "closed_at",
-                "closed_by",
-                "updated_at",
-            ]
+            message = OrderChatMessage.objects.create(
+                conversation=conversation,
+                sender_type=OrderChatMessage.SenderType.STAFF,
+                sender_user=request.user,
+                body=request_serializer.validated_data["body"],
+            )
+
+            conversation.status = (
+                OrderChatConversation.Status.ANSWERED
+            )
+            conversation.save(
+                update_fields=[
+                    "status",
+                    "closed_at",
+                    "closed_by",
+                    "updated_at",
+                ]
+            )
+
+        notification_result = _notify_chat_reply(
+            message,
+            request.user,
         )
 
         conversation = _get_chat_conversation(pk)
 
-        return Response(
+        response_data = dict(
             OrderChatConversationDetailSerializer(
                 conversation
-            ).data,
+            ).data
+        )
+        response_data["notification_result"] = notification_result
+
+        return Response(
+            response_data,
             status=status.HTTP_201_CREATED,
         )
 

@@ -13,6 +13,7 @@ from accounts.models import User
 from .models import (
     OrderChatConversation,
     OrderChatMessage,
+    OrderChatNotification,
     OrderEvidence,
     OrderReceptionReceipt,
     OrderReceptionReceiptDelivery,
@@ -578,6 +579,45 @@ class OrderChatPublicConversationSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+
+# HU-36: historial interno de notificaciones originadas por respuestas del chat.
+class OrderChatNotificationSerializer(serializers.ModelSerializer):
+    channel_display = serializers.CharField(
+        source="get_channel_display",
+        read_only=True,
+    )
+
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
+
+    triggered_by_username = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrderChatNotification
+        fields = (
+            "id",
+            "message",
+            "channel",
+            "channel_display",
+            "status",
+            "status_display",
+            "destination",
+            "prepared_message",
+            "action_url",
+            "detail",
+            "triggered_by_username",
+            "created_at",
+        )
+        read_only_fields = fields
+
+    def get_triggered_by_username(self, obj):
+        if not obj.triggered_by_id:
+            return None
+
+        return obj.triggered_by.username
+
 # HU-35: fila de la bandeja interna de conversaciones.
 class OrderChatConversationListSerializer(serializers.ModelSerializer):
     order_id = serializers.IntegerField(
@@ -692,11 +732,17 @@ class OrderChatConversationDetailSerializer(
         read_only=True,
     )
 
+    notifications = OrderChatNotificationSerializer(
+        many=True,
+        read_only=True,
+    )
+
     class Meta(OrderChatConversationListSerializer.Meta):
         fields = (
             *OrderChatConversationListSerializer.Meta.fields,
             "closed_by_username",
             "messages",
+            "notifications",
         )
         read_only_fields = fields
 
