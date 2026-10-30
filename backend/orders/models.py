@@ -234,6 +234,216 @@ class OrderReceptionReceiptDelivery(models.Model):
 
 
 
+# HU-35: conversación de chat asociada a una orden de servicio.
+class OrderChatConversation(models.Model):
+    class Status(models.TextChoices):
+        NEW = "NEW", "Nuevo"
+        PENDING = "PENDING", "Pendiente de respuesta"
+        ANSWERED = "ANSWERED", "Respondido"
+        CLOSED = "CLOSED", "Cerrado"
+
+    # Una orden mantiene una única conversación para conservar todo el
+    # historial de comunicación en el mismo contexto.
+    order = models.OneToOneField(
+        ServiceOrder,
+        on_delete=models.PROTECT,
+        related_name="chat_conversation",
+    )
+
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+        default=Status.NEW,
+        db_index=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    closed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    closed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_chat_conversations_closed",
+    )
+
+    class Meta:
+        ordering = ["-updated_at", "-id"]
+
+    def save(self, *args, **kwargs):
+        # Mantiene coherentes los datos de cierre/reapertura.
+        if self.status == self.Status.CLOSED:
+            if self.closed_at is None:
+                self.closed_at = timezone.now()
+        else:
+            self.closed_at = None
+            self.closed_by = None
+
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"Chat {self.order.tracking_code} - "
+            f"{self.get_status_display()}"
+        )
+
+
+# HU-35: mensajes de texto dentro de una conversación de una orden.
+class OrderChatMessage(models.Model):
+    class SenderType(models.TextChoices):
+        CLIENT = "CLIENT", "Cliente"
+        STAFF = "STAFF", "Martini Cell"
+
+    conversation = models.ForeignKey(
+        OrderChatConversation,
+        on_delete=models.CASCADE,
+        related_name="messages",
+    )
+
+    sender_type = models.CharField(
+        max_length=10,
+        choices=SenderType.choices,
+    )
+
+    # Solo se utiliza para mensajes enviados por personal autenticado.
+    # Los mensajes del cliente se relacionan con el cliente a través
+    # de conversation.order.client, evitando crear una cuenta pública.
+    sender_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_chat_messages_sent",
+    )
+
+    body = models.TextField(
+        max_length=2000,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    # Marcas de lectura independientes para mantener trazabilidad real
+    # de qué lado de la conversación todavía tiene mensajes pendientes.
+    read_by_client_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    read_by_staff_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(
+                fields=["conversation", "created_at"],
+                name="chat_msg_conv_created_idx",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+
+        self.body = (self.body or "").strip()
+
+        if not self.body:
+            raise ValidationError({
+                "body": "El mensaje no puede estar vacío."
+            })
+
+        if self.sender_type == self.SenderType.CLIENT:
+            if self.sender_user_id is not None:
+                raise ValidationError({
+                    "sender_user": (
+                        "Un mensaje del cliente no debe asociarse "
+                        "a un usuario interno."
+                    )
+                })
+
+        elif self.sender_type == self.SenderType.STAFF:
+            if self.sender_user_id is None:
+                raise ValidationError({
+                    "sender_user": (
+                        "Un mensaje de Martini Cell debe registrar "
+                        "el usuario que lo envió."
+                    )
+                })
+
+            if self.sender_user.role not in {"ADMIN", "TECH"}:
+                raise ValidationError({
+                    "sender_user": (
+                        "Solo un administrador o técnico puede "
+                        "responder el chat de una orden."
+                    )
+                })
+
+            if not self.sender_user.is_active:
+                raise ValidationError({
+                    "sender_user": (
+                        "El usuario que responde debe estar activo."
+                    )
+                })
+
+        if (
+            self.conversation_id
+            and self.conversation.status
+            == OrderChatConversation.Status.CLOSED
+        ):
+            raise ValidationError({
+                "conversation": (
+                    "La conversación está cerrada. "
+                    "Debe reabrirse antes de enviar nuevos mensajes."
+                )
+            })
+
+    def save(self, *args, **kwargs):
+        self.body = (self.body or "").strip()
+
+        # El emisor ya conoce el mensaje que acaba de enviar. La marca
+        # del lado contrario queda pendiente hasta que consulte el chat.
+        now = timezone.now()
+
+        if self.sender_type == self.SenderType.CLIENT:
+            if self.read_by_client_at is None:
+                self.read_by_client_at = now
+
+        elif self.sender_type == self.SenderType.STAFF:
+            if self.read_by_staff_at is None:
+                self.read_by_staff_at = now
+
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+        # Hace que el orden de la bandeja interna refleje la actividad
+        # más reciente incluso cuando solo se agrega un mensaje.
+        OrderChatConversation.objects.filter(
+            pk=self.conversation_id
+        ).update(updated_at=now)
+
+    def __str__(self):
+        return (
+            f"{self.conversation.order.tracking_code} - "
+            f"{self.get_sender_type_display()} - "
+            f"{self.created_at}"
+        )
+
+
 def order_evidence_upload_path(instance, filename):
     extension = Path(filename).suffix.lower()
 

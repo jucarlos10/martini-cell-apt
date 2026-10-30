@@ -11,6 +11,8 @@ from rest_framework import serializers
 from accounts.models import User
 
 from .models import (
+    OrderChatConversation,
+    OrderChatMessage,
     OrderEvidence,
     OrderReceptionReceipt,
     OrderReceptionReceiptDelivery,
@@ -475,6 +477,263 @@ class OrderReceptionReceiptDeliveryRequestSerializer(
 ):
     delivery_method = serializers.ChoiceField(
         choices=OrderReceptionReceiptDelivery.DeliveryMethod.choices,
+    )
+
+
+
+# HU-35: mensaje público. No expone el username del personal interno.
+class OrderChatPublicMessageSerializer(serializers.ModelSerializer):
+    sender_type_display = serializers.CharField(
+        source="get_sender_type_display",
+        read_only=True,
+    )
+
+    sender_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrderChatMessage
+        fields = (
+            "id",
+            "sender_type",
+            "sender_type_display",
+            "sender_name",
+            "body",
+            "created_at",
+        )
+        read_only_fields = fields
+
+    def get_sender_name(self, obj):
+        if obj.sender_type == OrderChatMessage.SenderType.CLIENT:
+            return "Cliente"
+
+        return "Martini Cell"
+
+
+# HU-35: detalle del mensaje para la bandeja interna.
+class OrderChatStaffMessageSerializer(serializers.ModelSerializer):
+    sender_type_display = serializers.CharField(
+        source="get_sender_type_display",
+        read_only=True,
+    )
+
+    sender_username = serializers.SerializerMethodField()
+
+    read_by_client = serializers.SerializerMethodField()
+    read_by_staff = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrderChatMessage
+        fields = (
+            "id",
+            "sender_type",
+            "sender_type_display",
+            "sender_username",
+            "body",
+            "created_at",
+            "read_by_client",
+            "read_by_staff",
+        )
+        read_only_fields = fields
+
+    def get_sender_username(self, obj):
+        if not obj.sender_user_id:
+            return None
+
+        return obj.sender_user.username
+
+    def get_read_by_client(self, obj):
+        return obj.read_by_client_at is not None
+
+    def get_read_by_staff(self, obj):
+        return obj.read_by_staff_at is not None
+
+
+# HU-35: respuesta pública asociada únicamente al tracking_code consultado.
+class OrderChatPublicConversationSerializer(serializers.ModelSerializer):
+    tracking_code = serializers.CharField(
+        source="order.tracking_code",
+        read_only=True,
+    )
+
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
+
+    messages = OrderChatPublicMessageSerializer(
+        many=True,
+        read_only=True,
+    )
+
+    class Meta:
+        model = OrderChatConversation
+        fields = (
+            "tracking_code",
+            "status",
+            "status_display",
+            "created_at",
+            "updated_at",
+            "messages",
+        )
+        read_only_fields = fields
+
+
+# HU-35: fila de la bandeja interna de conversaciones.
+class OrderChatConversationListSerializer(serializers.ModelSerializer):
+    order_id = serializers.IntegerField(
+        source="order.id",
+        read_only=True,
+    )
+
+    tracking_code = serializers.CharField(
+        source="order.tracking_code",
+        read_only=True,
+    )
+
+    client_name = serializers.CharField(
+        source="order.client.name",
+        read_only=True,
+    )
+
+    equipment_description = serializers.SerializerMethodField()
+
+    status_display = serializers.CharField(
+        source="get_status_display",
+        read_only=True,
+    )
+
+    unread_staff_count = serializers.SerializerMethodField()
+    last_message = serializers.SerializerMethodField()
+    last_message_at = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrderChatConversation
+        fields = (
+            "id",
+            "order_id",
+            "tracking_code",
+            "client_name",
+            "equipment_description",
+            "status",
+            "status_display",
+            "unread_staff_count",
+            "last_message",
+            "last_message_at",
+            "created_at",
+            "updated_at",
+            "closed_at",
+        )
+        read_only_fields = fields
+
+    def get_equipment_description(self, obj):
+        return (
+            f"{obj.order.equipment.brand} "
+            f"{obj.order.equipment.model}"
+        ).strip()
+
+    def _last_message(self, obj):
+        prefetched = getattr(obj, "_prefetched_objects_cache", {})
+
+        if "messages" in prefetched:
+            messages = list(prefetched["messages"])
+            return messages[-1] if messages else None
+
+        return obj.messages.order_by("-created_at", "-id").first()
+
+    def get_unread_staff_count(self, obj):
+        annotated_value = getattr(
+            obj,
+            "unread_staff_count",
+            None,
+        )
+
+        if annotated_value is not None:
+            return annotated_value
+
+        return obj.messages.filter(
+            sender_type=OrderChatMessage.SenderType.CLIENT,
+            read_by_staff_at__isnull=True,
+        ).count()
+
+    def get_last_message(self, obj):
+        message = self._last_message(obj)
+
+        if message is None:
+            return None
+
+        preview = message.body.strip()
+
+        if len(preview) > 120:
+            preview = f"{preview[:117]}..."
+
+        return {
+            "sender_type": message.sender_type,
+            "sender_type_display": message.get_sender_type_display(),
+            "body": preview,
+        }
+
+    def get_last_message_at(self, obj):
+        message = self._last_message(obj)
+
+        if message is None:
+            return None
+
+        return message.created_at
+
+
+# HU-35: conversación completa para ADMIN/TECH.
+class OrderChatConversationDetailSerializer(
+    OrderChatConversationListSerializer
+):
+    closed_by_username = serializers.SerializerMethodField()
+
+    messages = OrderChatStaffMessageSerializer(
+        many=True,
+        read_only=True,
+    )
+
+    class Meta(OrderChatConversationListSerializer.Meta):
+        fields = (
+            *OrderChatConversationListSerializer.Meta.fields,
+            "closed_by_username",
+            "messages",
+        )
+        read_only_fields = fields
+
+    def get_closed_by_username(self, obj):
+        if not obj.closed_by_id:
+            return None
+
+        return obj.closed_by.username
+
+
+# HU-35: cuerpo de un mensaje, reutilizado por cliente y personal.
+class OrderChatMessageCreateSerializer(serializers.Serializer):
+    body = serializers.CharField(
+        max_length=2000,
+        trim_whitespace=True,
+    )
+
+    def validate_body(self, value):
+        value = value.strip()
+
+        if not value:
+            raise serializers.ValidationError(
+                "El mensaje no puede estar vacío."
+            )
+
+        return value
+
+
+# HU-35: cambios de estado permitidos desde la gestión interna.
+# NEW se asigna al crear la conversación; una reapertura queda PENDING.
+class OrderChatStatusUpdateSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(
+        choices=(
+            OrderChatConversation.Status.PENDING,
+            OrderChatConversation.Status.ANSWERED,
+            OrderChatConversation.Status.CLOSED,
+        ),
     )
 
 

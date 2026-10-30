@@ -6,15 +6,17 @@ from zoneinfo import ZoneInfo
 
 from django.core.mail import EmailMessage
 from django.db import transaction
+from django.db.models import Count, Prefetch, Q
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.generics import (
     ListCreateAPIView,
     RetrieveUpdateAPIView,
 )
 from rest_framework.parsers import FormParser, MultiPartParser
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -24,6 +26,8 @@ from accounts.permissions import (
 )
 
 from .models import (
+    OrderChatConversation,
+    OrderChatMessage,
     OrderEvidence,
     OrderReceptionReceipt,
     OrderReceptionReceiptDelivery,
@@ -33,6 +37,11 @@ from .models import (
     ServiceOrder,
 )
 from .serializers import (
+    OrderChatConversationDetailSerializer,
+    OrderChatConversationListSerializer,
+    OrderChatMessageCreateSerializer,
+    OrderChatPublicConversationSerializer,
+    OrderChatStatusUpdateSerializer,
     OrderEvidenceSerializer,
     OrderReceptionReceiptDeliveryRequestSerializer,
     OrderReceptionReceiptSerializer,
@@ -689,6 +698,461 @@ class OrderReceptionReceiptDeliveryView(APIView):
                 },
             },
             status=status.HTTP_201_CREATED,
+        )
+
+
+
+# HU-35: chat público e interno asociado a una orden.
+def _chat_conversation_queryset():
+    return (
+        OrderChatConversation.objects
+        .select_related(
+            "order",
+            "order__client",
+            "order__equipment",
+            "closed_by",
+        )
+        .prefetch_related(
+            Prefetch(
+                "messages",
+                queryset=(
+                    OrderChatMessage.objects
+                    .select_related("sender_user")
+                    .order_by("created_at", "id")
+                ),
+            )
+        )
+    )
+
+
+def _get_public_order_by_tracking_code(tracking_code):
+    return get_object_or_404(
+        ServiceOrder.objects.select_related(
+            "client",
+            "equipment",
+        ),
+        tracking_code__iexact=(tracking_code or "").strip(),
+    )
+
+
+def _get_chat_conversation(pk):
+    return get_object_or_404(
+        _chat_conversation_queryset(),
+        pk=pk,
+    )
+
+
+def _mark_chat_read_by_client(conversation):
+    OrderChatMessage.objects.filter(
+        conversation=conversation,
+        sender_type=OrderChatMessage.SenderType.STAFF,
+        read_by_client_at__isnull=True,
+    ).update(
+        read_by_client_at=timezone.now()
+    )
+
+
+def _mark_chat_read_by_staff(conversation):
+    OrderChatMessage.objects.filter(
+        conversation=conversation,
+        sender_type=OrderChatMessage.SenderType.CLIENT,
+        read_by_staff_at__isnull=True,
+    ).update(
+        read_by_staff_at=timezone.now()
+    )
+
+
+class PublicOrderChatView(APIView):
+    """
+    Chat del cliente usando únicamente el tracking_code existente.
+
+    La respuesta pública se limita al estado del chat y sus mensajes.
+    No expone usuarios internos, datos financieros, notas privadas ni
+    otros detalles de la orden.
+    """
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, tracking_code):
+        order = _get_public_order_by_tracking_code(
+            tracking_code
+        )
+
+        try:
+            conversation = order.chat_conversation
+        except OrderChatConversation.DoesNotExist:
+            return Response(
+                {
+                    "tracking_code": order.tracking_code,
+                    "status": None,
+                    "status_display": "Sin conversación",
+                    "created_at": None,
+                    "updated_at": None,
+                    "messages": [],
+                }
+            )
+
+        _mark_chat_read_by_client(conversation)
+
+        conversation = (
+            _chat_conversation_queryset()
+            .get(pk=conversation.pk)
+        )
+
+        return Response(
+            OrderChatPublicConversationSerializer(
+                conversation
+            ).data
+        )
+
+    @transaction.atomic
+    def post(self, request, tracking_code):
+        order = get_object_or_404(
+            ServiceOrder.objects.select_for_update(),
+            tracking_code__iexact=(tracking_code or "").strip(),
+        )
+
+        request_serializer = OrderChatMessageCreateSerializer(
+            data=request.data
+        )
+        request_serializer.is_valid(raise_exception=True)
+
+        conversation, created = (
+            OrderChatConversation.objects
+            .select_for_update()
+            .get_or_create(
+                order=order,
+                defaults={
+                    "status": OrderChatConversation.Status.NEW,
+                },
+            )
+        )
+
+        if (
+            conversation.status
+            == OrderChatConversation.Status.CLOSED
+        ):
+            return Response(
+                {
+                    "detail": (
+                        "Esta conversación está cerrada. "
+                        "Martini Cell debe reabrirla antes de "
+                        "recibir nuevos mensajes."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        # Si Martini Cell ya había respondido, un nuevo mensaje del
+        # cliente vuelve a dejar la conversación pendiente.
+        if (
+            not created
+            and conversation.status
+            == OrderChatConversation.Status.ANSWERED
+        ):
+            conversation.status = (
+                OrderChatConversation.Status.PENDING
+            )
+            conversation.save(
+                update_fields=[
+                    "status",
+                    "closed_at",
+                    "closed_by",
+                    "updated_at",
+                ]
+            )
+
+        OrderChatMessage.objects.create(
+            conversation=conversation,
+            sender_type=OrderChatMessage.SenderType.CLIENT,
+            sender_user=None,
+            body=request_serializer.validated_data["body"],
+        )
+
+        conversation = (
+            _chat_conversation_queryset()
+            .get(pk=conversation.pk)
+        )
+
+        return Response(
+            OrderChatPublicConversationSerializer(
+                conversation
+            ).data,
+            status=(
+                status.HTTP_201_CREATED
+                if created
+                else status.HTTP_200_OK
+            ),
+        )
+
+
+class OrderChatConversationListView(APIView):
+    """
+    Bandeja interna de conversaciones para ADMIN y TECH.
+    """
+
+    permission_classes = [
+        IsAuthenticated,
+        IsAdminOrTechRole,
+    ]
+
+    def get(self, request):
+        conversations = (
+            OrderChatConversation.objects
+            .select_related(
+                "order",
+                "order__client",
+                "order__equipment",
+            )
+            .prefetch_related(
+                Prefetch(
+                    "messages",
+                    queryset=(
+                        OrderChatMessage.objects
+                        .select_related("sender_user")
+                        .order_by("created_at", "id")
+                    ),
+                )
+            )
+            .annotate(
+                unread_staff_count=Count(
+                    "messages",
+                    filter=Q(
+                        messages__sender_type=(
+                            OrderChatMessage.SenderType.CLIENT
+                        ),
+                        messages__read_by_staff_at__isnull=True,
+                    ),
+                )
+            )
+            .order_by("-updated_at", "-id")
+        )
+
+        requested_status = (
+            request.query_params.get("status", "")
+            .strip()
+            .upper()
+        )
+
+        if requested_status:
+            valid_statuses = {
+                choice
+                for choice, _ in (
+                    OrderChatConversation.Status.choices
+                )
+            }
+
+            if requested_status not in valid_statuses:
+                return Response(
+                    {
+                        "detail": (
+                            "El estado indicado no es válido."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            conversations = conversations.filter(
+                status=requested_status
+            )
+
+        unread_only = (
+            request.query_params.get("unread", "")
+            .strip()
+            .lower()
+        )
+
+        if unread_only in {"1", "true", "yes", "on"}:
+            conversations = conversations.filter(
+                unread_staff_count__gt=0
+            )
+
+        serializer = OrderChatConversationListSerializer(
+            conversations,
+            many=True,
+        )
+
+        return Response(serializer.data)
+
+
+class OrderChatConversationDetailView(APIView):
+    """
+    Consulta y respuesta interna de una conversación.
+    Abrir el detalle marca como leídos los mensajes del cliente.
+    """
+
+    permission_classes = [
+        IsAuthenticated,
+        IsAdminOrTechRole,
+    ]
+
+    def get(self, request, pk):
+        conversation = _get_chat_conversation(pk)
+
+        _mark_chat_read_by_staff(conversation)
+
+        conversation = _get_chat_conversation(pk)
+
+        return Response(
+            OrderChatConversationDetailSerializer(
+                conversation
+            ).data
+        )
+
+    @transaction.atomic
+    def post(self, request, pk):
+        request_serializer = OrderChatMessageCreateSerializer(
+            data=request.data
+        )
+        request_serializer.is_valid(raise_exception=True)
+
+        conversation = get_object_or_404(
+            OrderChatConversation.objects
+            .select_for_update()
+            .select_related("order"),
+            pk=pk,
+        )
+
+        if (
+            conversation.status
+            == OrderChatConversation.Status.CLOSED
+        ):
+            return Response(
+                {
+                    "detail": (
+                        "La conversación está cerrada. "
+                        "Reábrela antes de responder."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        # Al responder, todo lo que estaba pendiente del cliente
+        # queda leído por el personal que está atendiendo el chat.
+        _mark_chat_read_by_staff(conversation)
+
+        OrderChatMessage.objects.create(
+            conversation=conversation,
+            sender_type=OrderChatMessage.SenderType.STAFF,
+            sender_user=request.user,
+            body=request_serializer.validated_data["body"],
+        )
+
+        conversation.status = (
+            OrderChatConversation.Status.ANSWERED
+        )
+        conversation.save(
+            update_fields=[
+                "status",
+                "closed_at",
+                "closed_by",
+                "updated_at",
+            ]
+        )
+
+        conversation = _get_chat_conversation(pk)
+
+        return Response(
+            OrderChatConversationDetailSerializer(
+                conversation
+            ).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class OrderChatConversationStatusView(APIView):
+    """
+    Cierra o reabre una conversación sin perder mensajes.
+
+    Los estados NEW/PENDING/ANSWERED se administran por actividad del
+    chat; desde este endpoint solo se permite cerrar o reabrir.
+    """
+
+    permission_classes = [
+        IsAuthenticated,
+        IsAdminOrTechRole,
+    ]
+
+    @transaction.atomic
+    def patch(self, request, pk):
+        request_serializer = OrderChatStatusUpdateSerializer(
+            data=request.data
+        )
+        request_serializer.is_valid(raise_exception=True)
+
+        new_status = request_serializer.validated_data[
+            "status"
+        ]
+
+        conversation = get_object_or_404(
+            OrderChatConversation.objects
+            .select_for_update()
+            .select_related("order"),
+            pk=pk,
+        )
+
+        if (
+            conversation.status
+            == OrderChatConversation.Status.CLOSED
+        ):
+            if (
+                new_status
+                != OrderChatConversation.Status.PENDING
+            ):
+                return Response(
+                    {
+                        "detail": (
+                            "Una conversación cerrada solo puede "
+                            "reabrirse como Pendiente de respuesta."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            conversation.status = (
+                OrderChatConversation.Status.PENDING
+            )
+            conversation.closed_at = None
+            conversation.closed_by = None
+
+        else:
+            if (
+                new_status
+                != OrderChatConversation.Status.CLOSED
+            ):
+                return Response(
+                    {
+                        "detail": (
+                            "El estado operativo del chat cambia "
+                            "automáticamente con los mensajes. "
+                            "Desde esta acción solo puedes cerrar "
+                            "la conversación."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            conversation.status = (
+                OrderChatConversation.Status.CLOSED
+            )
+            conversation.closed_at = timezone.now()
+            conversation.closed_by = request.user
+
+        conversation.save(
+            update_fields=[
+                "status",
+                "closed_at",
+                "closed_by",
+                "updated_at",
+            ]
+        )
+
+        conversation = _get_chat_conversation(pk)
+
+        return Response(
+            OrderChatConversationDetailSerializer(
+                conversation
+            ).data
         )
 
 
