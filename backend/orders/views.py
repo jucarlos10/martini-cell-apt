@@ -614,7 +614,8 @@ class OrderReceptionReceiptDeliveryView(APIView):
         message = (
             "Hola. Martini Cell confirma la recepción de tu equipo. "
             f"Tu código de orden y seguimiento es {order.tracking_code}. "
-            "Conserva este código para consultar el estado de la reparación."
+            "Puedes consultar el estado de la reparación directamente en: "
+            f"{_public_tracking_url(order.tracking_code)}"
         )
 
         whatsapp_url = (
@@ -849,7 +850,7 @@ class OrderReceptionReceiptDeliveryView(APIView):
 
 
 # HU-36: notificación al cliente cuando Martini Cell responde el chat.
-def _public_tracking_url():
+def _public_tracking_url(tracking_code=""):
     configured_url = getattr(
         settings,
         "FRONTEND_PUBLIC_URL",
@@ -863,15 +864,24 @@ def _public_tracking_url():
     else:
         base_url = "https://martini-cell-frontend.vercel.app"
 
-    return f"{base_url}/consulta"
+    url = f"{base_url}/consulta"
+    normalized_code = str(tracking_code or "").strip().upper()
+
+    if normalized_code:
+        return (
+            f"{url}?codigo="
+            f"{quote(normalized_code, safe='')}"
+        )
+
+    return url
 
 
 def _chat_notification_text(order):
     return (
         "Hola. Martini Cell tiene una nueva respuesta para tu orden "
         f"{order.tracking_code}. "
-        "Puedes revisarla desde la consulta pública usando el mismo "
-        "código de seguimiento."
+        "Puedes revisarla directamente en: "
+        f"{_public_tracking_url(order.tracking_code)}"
     )
 
 
@@ -880,7 +890,7 @@ def _chat_notification_email_body(order):
         "MARTINI CELL\n\n"
         "Tienes una nueva respuesta en el chat de tu orden.\n\n"
         f"Código de orden y seguimiento: {order.tracking_code}\n"
-        f"Consulta: {_public_tracking_url()}\n\n"
+        f"Consulta: {_public_tracking_url(order.tracking_code)}\n\n"
         "Por seguridad, este correo no incluye el contenido del mensaje. "
         "Ingresa a la consulta pública y utiliza tu código de seguimiento "
         "para revisar la conversación.\n"
@@ -1387,6 +1397,128 @@ class OrderChatConversationListView(APIView):
 
         return Response(serializer.data)
 
+    def post(self, request):
+        """
+        HU-38: permite a ADMIN/TECH iniciar una conversación usando el
+        tracking_code de una orden, aunque el cliente nunca haya escrito.
+
+        Si la conversación ya existe, se reutiliza para conservar un único
+        historial por orden. La notificación se procesa después de confirmar
+        el mensaje para que un fallo de EMAIL/WhatsApp no lo revierta.
+        """
+        tracking_code = str(
+            request.data.get("tracking_code") or ""
+        ).strip().upper()
+
+        if not tracking_code:
+            return Response(
+                {
+                    "detail": (
+                        "Ingresa el código de orden para iniciar "
+                        "la conversación."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        request_serializer = OrderChatMessageCreateSerializer(
+            data={
+                "body": request.data.get("body", ""),
+            }
+        )
+        request_serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            order = get_object_or_404(
+                ServiceOrder.objects
+                .select_for_update()
+                .select_related(
+                    "client",
+                    "equipment",
+                ),
+                tracking_code__iexact=tracking_code,
+            )
+
+            conversation, created = (
+                OrderChatConversation.objects
+                .select_for_update()
+                .get_or_create(
+                    order=order,
+                    defaults={
+                        "status": (
+                            OrderChatConversation.Status.ANSWERED
+                        ),
+                    },
+                )
+            )
+
+            if (
+                conversation.status
+                == OrderChatConversation.Status.CLOSED
+            ):
+                return Response(
+                    {
+                        "detail": (
+                            "La conversación de esta orden está cerrada. "
+                            "Reábrela antes de enviar un nuevo mensaje."
+                        ),
+                        "conversation_id": conversation.id,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            _mark_chat_read_by_staff(conversation)
+
+            message = OrderChatMessage.objects.create(
+                conversation=conversation,
+                sender_type=OrderChatMessage.SenderType.STAFF,
+                sender_user=request.user,
+                body=request_serializer.validated_data["body"],
+            )
+
+            conversation.status = (
+                OrderChatConversation.Status.ANSWERED
+            )
+            conversation.save(
+                update_fields=[
+                    "status",
+                    "closed_at",
+                    "closed_by",
+                    "updated_at",
+                ]
+            )
+
+        notification_result = _notify_chat_reply(
+            message,
+            request.user,
+        )
+
+        conversation = _get_chat_conversation(
+            conversation.pk
+        )
+
+        response_data = dict(
+            OrderChatConversationDetailSerializer(
+                conversation
+            ).data
+        )
+        response_data["conversation_created"] = created
+        response_data["public_tracking_url"] = (
+            _public_tracking_url(order.tracking_code)
+        )
+        response_data["notification_result"] = (
+            notification_result
+        )
+
+        return Response(
+            response_data,
+            status=(
+                status.HTTP_201_CREATED
+                if created
+                else status.HTTP_200_OK
+            ),
+        )
+
 
 class OrderChatConversationDetailView(APIView):
     """
@@ -1480,6 +1612,11 @@ class OrderChatConversationDetailView(APIView):
             OrderChatConversationDetailSerializer(
                 conversation
             ).data
+        )
+        response_data["public_tracking_url"] = (
+            _public_tracking_url(
+                conversation.order.tracking_code
+            )
         )
         response_data["notification_result"] = notification_result
 
@@ -1623,8 +1760,8 @@ def _status_notification_text(order, status_history):
         "Hola. Martini Cell informa que tu orden "
         f"{order.tracking_code} cambió de estado a "
         f"\"{new_status_display}\". "
-        "Puedes revisar el seguimiento utilizando el mismo código "
-        "de orden."
+        "Puedes revisar el seguimiento directamente en: "
+        f"{_public_tracking_url(order.tracking_code)}"
     )
 
 
@@ -1638,7 +1775,7 @@ def _status_notification_email_body(order, status_history):
         "El estado de tu orden fue actualizado.\n\n"
         f"Código de orden y seguimiento: {order.tracking_code}\n"
         f"Nuevo estado: {new_status_display}\n"
-        f"Consulta: {_public_tracking_url()}\n\n"
+        f"Consulta: {_public_tracking_url(order.tracking_code)}\n\n"
         "Por seguridad, este correo no incluye notas internas, costos "
         "ni detalles técnicos privados. Ingresa a la consulta pública "
         "y utiliza el mismo código de seguimiento para revisar el avance.\n"

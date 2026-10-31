@@ -19,14 +19,18 @@ const loadingList = ref(true)
 const loadingConversation = ref(false)
 const sendingMessage = ref(false)
 const changingStatus = ref(false)
+const startingConversation = ref(false)
 
 const listError = ref('')
 const conversationError = ref('')
 const notificationFeedback = ref(null)
+const startConversationError = ref('')
 
 const statusFilter = ref('')
 const unreadOnly = ref(false)
 const messageBody = ref('')
+const newConversationTrackingCode = ref('')
+const newConversationBody = ref('')
 
 const messagesContainer = ref(null)
 
@@ -118,6 +122,86 @@ function notificationChannelLabel(channel) {
     EMAIL: 'Correo electrónico',
     WHATSAPP: 'WhatsApp',
   }[channel] || channel || 'Sin canal'
+}
+
+function publicTrackingUrl(trackingCode) {
+  const code = String(trackingCode || '').trim().toUpperCase()
+
+  if (!code) {
+    return `${window.location.origin}/consulta`
+  }
+
+  return (
+    `${window.location.origin}/consulta?codigo=` +
+    encodeURIComponent(code)
+  )
+}
+
+function messageParts(body) {
+  const text = String(body || '')
+  const urlPattern = /(https?:\/\/[^\s]+)/g
+  const parts = []
+  let lastIndex = 0
+
+  for (const match of text.matchAll(urlPattern)) {
+    const index = match.index ?? 0
+
+    if (index > lastIndex) {
+      parts.push({
+        type: 'text',
+        text: text.slice(lastIndex, index),
+      })
+    }
+
+    parts.push({
+      type: 'link',
+      text: match[0],
+      href: match[0],
+    })
+
+    lastIndex = index + match[0].length
+  }
+
+  if (lastIndex < text.length) {
+    parts.push({
+      type: 'text',
+      text: text.slice(lastIndex),
+    })
+  }
+
+  return parts.length
+    ? parts
+    : [{ type: 'text', text }]
+}
+
+function appendTrackingLinkToMessage() {
+  const trackingCode =
+    selectedConversation.value?.tracking_code
+
+  if (!trackingCode) return
+
+  const link = publicTrackingUrl(trackingCode)
+
+  if (messageBody.value.includes(link)) return
+
+  messageBody.value = messageBody.value.trim()
+    ? `${messageBody.value.trim()}\n\n${link}`
+    : link
+}
+
+function appendTrackingLinkToNewConversation() {
+  const trackingCode =
+    newConversationTrackingCode.value.trim().toUpperCase()
+
+  if (!trackingCode) return
+
+  const link = publicTrackingUrl(trackingCode)
+
+  if (newConversationBody.value.includes(link)) return
+
+  newConversationBody.value = newConversationBody.value.trim()
+    ? `${newConversationBody.value.trim()}\n\n${link}`
+    : link
 }
 
 function buildListUrl() {
@@ -299,6 +383,89 @@ async function selectConversation(conversation) {
 
   await loadConversation(conversation.id)
   await loadConversations({ silent: true })
+}
+
+async function startConversation() {
+  const trackingCode =
+    newConversationTrackingCode.value.trim().toUpperCase()
+  const body = newConversationBody.value.trim()
+
+  if (
+    !trackingCode ||
+    !body ||
+    startingConversation.value
+  ) {
+    return
+  }
+
+  startingConversation.value = true
+  startConversationError.value = ''
+  conversationError.value = ''
+  notificationFeedback.value = null
+
+  try {
+    const response = await authenticatedFetch(
+      '/api/orders/chat/',
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tracking_code: trackingCode,
+          body,
+        }),
+      },
+    )
+
+    const data = await response.json().catch(() => null)
+
+    if (!response.ok) {
+      if (
+        response.status === 409 &&
+        data?.conversation_id
+      ) {
+        selectedConversationId.value =
+          data.conversation_id
+        selectedConversation.value = null
+
+        await loadConversation(data.conversation_id)
+        await loadConversations({ silent: true })
+      }
+
+      const bodyErrors = data?.body
+
+      if (Array.isArray(bodyErrors) && bodyErrors.length) {
+        throw new Error(bodyErrors[0])
+      }
+
+      throw new Error(
+        data?.detail ||
+        'No fue posible iniciar la conversación.',
+      )
+    }
+
+    selectedConversationId.value = data.id
+    selectedConversation.value = data
+    notificationFeedback.value =
+      data?.notification_result || null
+
+    newConversationTrackingCode.value = ''
+    newConversationBody.value = ''
+
+    scrollMessagesToBottom()
+
+    await loadConversations({ silent: true })
+
+  } catch (error) {
+    startConversationError.value =
+      error?.message ||
+      'Ocurrió un error al iniciar la conversación.'
+
+  } finally {
+    startingConversation.value = false
+  }
 }
 
 async function sendMessage() {
@@ -521,6 +688,136 @@ onBeforeUnmount(() => {
       >
         Reintentar
       </button>
+    </div>
+
+    <div class="mc-card p-3 mb-3">
+      <div
+        class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3"
+      >
+        <div>
+          <div class="fw-bold">
+            Iniciar conversación
+          </div>
+
+          <div class="small text-muted">
+            Busca al cliente usando el mismo código de orden y seguimiento
+            (MC-...) y envía el primer mensaje desde Martini Cell.
+          </div>
+        </div>
+      </div>
+
+      <div
+        v-if="startConversationError"
+        class="alert alert-warning py-2 small"
+        role="alert"
+      >
+        {{ startConversationError }}
+      </div>
+
+      <form
+        class="row g-3"
+        @submit.prevent="startConversation"
+      >
+        <div class="col-lg-4">
+          <label
+            for="new-chat-tracking-code"
+            class="form-label fw-semibold"
+          >
+            Número de orden
+          </label>
+
+          <input
+            id="new-chat-tracking-code"
+            v-model.trim="newConversationTrackingCode"
+            type="text"
+            class="form-control text-uppercase"
+            maxlength="20"
+            placeholder="MC-XXXXXXXXXXXX"
+            autocomplete="off"
+            :disabled="startingConversation"
+            required
+            @input="
+              newConversationTrackingCode =
+                newConversationTrackingCode.toUpperCase()
+            "
+          >
+
+          <div class="form-text">
+            Usa el código único de la orden del cliente.
+          </div>
+        </div>
+
+        <div class="col-lg-8">
+          <label
+            for="new-chat-message"
+            class="form-label fw-semibold"
+          >
+            Primer mensaje
+          </label>
+
+          <textarea
+            id="new-chat-message"
+            v-model="newConversationBody"
+            class="form-control"
+            rows="3"
+            maxlength="2000"
+            placeholder="Escribe el mensaje que recibirá el cliente..."
+            :disabled="startingConversation"
+            required
+          ></textarea>
+
+          <div
+            class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-2"
+          >
+            <div class="d-flex flex-wrap align-items-center gap-2">
+              <button
+                type="button"
+                class="btn btn-sm btn-outline-secondary"
+                :disabled="
+                  startingConversation ||
+                  !newConversationTrackingCode.trim()
+                "
+                @click="appendTrackingLinkToNewConversation"
+              >
+                <i class="bi bi-link-45deg me-1"></i>
+                Agregar enlace de seguimiento
+              </button>
+
+              <span class="small text-muted">
+                {{ newConversationBody.length }}/2000
+              </span>
+            </div>
+
+            <button
+              type="submit"
+              class="btn btn-primary"
+              :disabled="
+                startingConversation ||
+                !newConversationTrackingCode.trim() ||
+                !newConversationBody.trim()
+              "
+            >
+              <span
+                v-if="startingConversation"
+                class="spinner-border spinner-border-sm me-1"
+                aria-hidden="true"
+              ></span>
+
+              <i
+                v-else
+                class="bi bi-chat-dots me-1"
+                aria-hidden="true"
+              ></i>
+
+              {{
+                startingConversation
+                  ? 'Iniciando...'
+                  : 'Iniciar conversación'
+              }}
+            </button>
+          </div>
+        </div>
+      </form>
     </div>
 
     <div class="mc-card p-3 mb-3">
@@ -769,13 +1066,29 @@ onBeforeUnmount(() => {
                   {{ selectedConversation.equipment_description }}
                 </div>
 
-                <RouterLink
-                  :to="`/ordenes/${selectedConversation.order_id}`"
-                  class="small text-decoration-none d-inline-block mt-1"
-                >
-                  <i class="bi bi-box-arrow-up-right me-1"></i>
-                  Ver orden
-                </RouterLink>
+                <div class="d-flex flex-wrap gap-3 mt-1">
+                  <RouterLink
+                    :to="`/ordenes/${selectedConversation.order_id}`"
+                    class="small text-decoration-none"
+                  >
+                    <i class="bi bi-box-arrow-up-right me-1"></i>
+                    Ver orden
+                  </RouterLink>
+
+                  <a
+                    :href="
+                      publicTrackingUrl(
+                        selectedConversation.tracking_code,
+                      )
+                    "
+                    class="small text-decoration-none"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <i class="bi bi-link-45deg me-1"></i>
+                    Abrir seguimiento público
+                  </a>
+                </div>
               </div>
 
               <div class="d-flex flex-wrap gap-2">
@@ -933,7 +1246,22 @@ onBeforeUnmount(() => {
                   </div>
 
                   <div class="chat-message-body">
-                    {{ message.body }}
+                    <template
+                      v-for="(part, partIndex) in messageParts(message.body)"
+                      :key="`${message.id}-${partIndex}`"
+                    >
+                      <a
+                        v-if="part.type === 'link'"
+                        :href="part.href"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="chat-message-link"
+                      >
+                        {{ part.text }}
+                      </a>
+
+                      <span v-else>{{ part.text }}</span>
+                    </template>
                   </div>
 
                   <div
@@ -1091,9 +1419,21 @@ onBeforeUnmount(() => {
               <div
                 class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-2"
               >
-                <span class="small text-muted">
-                  {{ messageBody.length }}/2000
-                </span>
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-outline-secondary"
+                    :disabled="sendingMessage"
+                    @click="appendTrackingLinkToMessage"
+                  >
+                    <i class="bi bi-link-45deg me-1"></i>
+                    Agregar enlace de seguimiento
+                  </button>
+
+                  <span class="small text-muted">
+                    {{ messageBody.length }}/2000
+                  </span>
+                </div>
 
                 <button
                   type="submit"
@@ -1312,6 +1652,17 @@ onBeforeUnmount(() => {
 .chat-message-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.chat-message-link {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-message-staff .chat-message-link {
+  color: #ffffff;
 }
 
 .chat-read-state {
