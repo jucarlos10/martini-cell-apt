@@ -1,5 +1,5 @@
 <script setup>
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const code = ref('')
 const data = ref(null)
@@ -101,6 +101,64 @@ function formatDate(value) {
     dateStyle: 'short',
     timeStyle: 'short',
   })
+}
+
+function messageParts(value) {
+  const text = String(value || '')
+  const urlPattern = /https?:\/\/[^\s<>"']+/gi
+  const parts = []
+  let lastIndex = 0
+
+  for (const match of text.matchAll(urlPattern)) {
+    const matchIndex = match.index ?? 0
+    let url = match[0]
+    let trailing = ''
+
+    while (url && /[.,;:!?\])}]$/.test(url)) {
+      trailing = `${url.slice(-1)}${trailing}`
+      url = url.slice(0, -1)
+    }
+
+    if (matchIndex > lastIndex) {
+      parts.push({
+        type: 'text',
+        text: text.slice(lastIndex, matchIndex),
+      })
+    }
+
+    if (url) {
+      parts.push({
+        type: 'link',
+        text: url,
+        href: url,
+      })
+    }
+
+    if (trailing) {
+      parts.push({
+        type: 'text',
+        text: trailing,
+      })
+    }
+
+    lastIndex = matchIndex + match[0].length
+  }
+
+  if (lastIndex < text.length) {
+    parts.push({
+      type: 'text',
+      text: text.slice(lastIndex),
+    })
+  }
+
+  if (!parts.length) {
+    parts.push({
+      type: 'text',
+      text,
+    })
+  }
+
+  return parts
 }
 
 function historyForStatus(status) {
@@ -563,6 +621,17 @@ async function search() {
       updated_at: result.updated_at,
       history: result.history,
     }
+
+    const currentUrl = new URL(window.location.href)
+    currentUrl.searchParams.set(
+      'codigo',
+      result.tracking_code,
+    )
+    window.history.replaceState(
+      {},
+      '',
+      `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`,
+    )
   } catch (err) {
     if (
       requestId === currentRequest
@@ -578,6 +647,26 @@ async function search() {
     }
   }
 }
+
+onMounted(async () => {
+  const params = new URLSearchParams(window.location.search)
+  const queryCode = (params.get('codigo') || '')
+    .trim()
+    .toUpperCase()
+
+  if (!queryCode) return
+
+  code.value = queryCode
+
+  // Permite que el watcher termine de limpiar cualquier estado previo
+  // antes de iniciar la consulta automática desde el enlace compartido.
+  await nextTick()
+  await search()
+
+  if (data.value) {
+    await openChat()
+  }
+})
 
 onBeforeUnmount(() => {
   currentRequest += 1
@@ -925,7 +1014,22 @@ onBeforeUnmount(() => {
                   </div>
 
                   <div class="chat-message-body">
-                    {{ message.body }}
+                    <template
+                      v-for="(part, partIndex) in messageParts(message.body)"
+                      :key="`${message.id}-${partIndex}`"
+                    >
+                      <a
+                        v-if="part.type === 'link'"
+                        :href="part.href"
+                        class="chat-message-link"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {{ part.text }}
+                      </a>
+
+                      <span v-else>{{ part.text }}</span>
+                    </template>
                   </div>
 
                   <div class="chat-message-time">
@@ -1246,6 +1350,21 @@ onBeforeUnmount(() => {
 .chat-message-body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.chat-message-link {
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+
+.chat-message-client .chat-message-link {
+  color: inherit;
+  font-weight: 600;
+}
+
+.chat-message-staff .chat-message-link {
+  color: #0d6efd;
+  font-weight: 600;
 }
 
 .chat-message-time {
