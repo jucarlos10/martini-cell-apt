@@ -195,6 +195,10 @@ class WhatsAppCloudChatNotificationTests(APITestCase):
         mocked_send.assert_called_once()
 
         call_kwargs = mocked_send.call_args.kwargs
+        tracking_url = (
+            "https://martini-cell-frontend.vercel.app/consulta?codigo="
+            f"{self.order.tracking_code}"
+        )
 
         self.assertEqual(
             call_kwargs["to"],
@@ -208,6 +212,7 @@ class WhatsAppCloudChatNotificationTests(APITestCase):
             call_kwargs["body_parameters"],
             [
                 self.order.tracking_code,
+                tracking_url,
             ],
         )
         self.assertEqual(
@@ -269,6 +274,10 @@ class WhatsAppCloudChatNotificationTests(APITestCase):
         )
         self.assertIn(
             self.order.tracking_code,
+            notification.prepared_message,
+        )
+        self.assertIn(
+            "https://martini-cell-frontend.vercel.app/consulta?codigo=",
             notification.prepared_message,
         )
         self.assertIn(

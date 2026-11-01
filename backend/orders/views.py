@@ -647,6 +647,7 @@ class OrderReceptionReceiptDeliveryView(APIView):
                     template_name=template_name,
                     body_parameters=[
                         order.tracking_code,
+                        _public_tracking_url(order.tracking_code),
                     ],
                     language_code=getattr(
                         settings,
@@ -1045,6 +1046,7 @@ def _notify_chat_reply(message, user):
                     template_name=template_name,
                     body_parameters=[
                         order.tracking_code,
+                        _public_tracking_url(order.tracking_code),
                     ],
                     language_code=getattr(
                         settings,
@@ -1936,6 +1938,7 @@ def _notify_status_change(status_history, user):
                     body_parameters=[
                         order.tracking_code,
                         new_status_display,
+                        _public_tracking_url(order.tracking_code),
                     ],
                     language_code=getattr(
                         settings,
