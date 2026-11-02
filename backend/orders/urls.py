@@ -4,14 +4,20 @@ from .financial_views import OrderFinancialView
 from .indicator_views import OperationalIndicatorsView
 from .public_tracking import PublicOrderStatusView
 from .views import (
+    OrderChatConversationDetailView,
+    OrderChatConversationListView,
+    OrderChatConversationStatusView,
     OrderEvidenceDownloadView,
     OrderEvidenceListCreateView,
+    OrderReceptionReceiptDeliveryView,
+    OrderReceptionReceiptView,
     OrderSensitiveChangeHistoryView,
     OrderStatusHistoryView,
     OrderStatusView,
     OrderTechnicalReportHistoryView,
     OrderTechnicalReportView,
     OrderTimesView,
+    PublicOrderChatView,
     ServiceOrderDetailView,
     ServiceOrderListCreateView,
 )
@@ -47,6 +53,13 @@ urlpatterns = [
         name="public-order-status",
     ),
 
+    # HU-35: chat público asociado al mismo tracking_code de la orden.
+    path(
+        "public/<str:tracking_code>/chat/",
+        PublicOrderChatView.as_view(),
+        name="public-order-chat",
+    ),
+
     # HU-16: Indicadores operacionales.
     path(
         "indicators/",
@@ -61,10 +74,39 @@ urlpatterns = [
         name="order-warranty-summary-list",
     ),
 
+    # HU-35: bandeja y gestión interna del chat para ADMIN/TECH.
+    path(
+        "chat/",
+        OrderChatConversationListView.as_view(),
+        name="order-chat-conversation-list",
+    ),
+    path(
+        "chat/<int:pk>/",
+        OrderChatConversationDetailView.as_view(),
+        name="order-chat-conversation-detail",
+    ),
+    path(
+        "chat/<int:pk>/status/",
+        OrderChatConversationStatusView.as_view(),
+        name="order-chat-conversation-status",
+    ),
+
     path(
         "<int:pk>/",
         ServiceOrderDetailView.as_view(),
         name="service-order-detail",
+    ),
+
+    # HU-34: comprobante de recepción y registro de entrega.
+    path(
+        "<int:pk>/reception-receipt/",
+        OrderReceptionReceiptView.as_view(),
+        name="order-reception-receipt",
+    ),
+    path(
+        "<int:pk>/reception-receipt/deliver/",
+        OrderReceptionReceiptDeliveryView.as_view(),
+        name="order-reception-receipt-delivery",
     ),
     # HU-27: Historial de cambios sensibles de la orden.
     path(

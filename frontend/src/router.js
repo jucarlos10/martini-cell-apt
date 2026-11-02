@@ -12,6 +12,7 @@ import Parts from './views/PartsView.vue'
 import Warranties from './views/WarrantiesView.vue'
 import Indicators from './views/IndicatorsView.vue'
 import Users from './views/UsersView.vue'
+import OrderChat from './views/OrderChatView.vue'
 import PublicTracking from './views/PublicTrackingView.vue'
 
 const routes = [
@@ -40,6 +41,11 @@ const routes = [
   {
     path: '/indicadores',
     component: Indicators,
+    meta: { technical: true },
+  },
+  {
+    path: '/chat',
+    component: OrderChat,
     meta: { technical: true },
   },
   {

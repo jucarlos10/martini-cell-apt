@@ -56,6 +56,10 @@ function logout() {
           <i class="bi bi-clipboard2-check" aria-hidden="true"></i>
           <span>Órdenes</span>
         </router-link>
+        <router-link v-if="user.role !== 'HELPER'" to="/chat" @click="closeMenu">
+          <i class="bi bi-chat-dots" aria-hidden="true"></i>
+          <span>Chat</span>
+        </router-link>
         <router-link to="/clientes" @click="closeMenu">
           <i class="bi bi-people" aria-hidden="true"></i>
           <span>Clientes y equipos</span>

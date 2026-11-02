@@ -26,6 +26,10 @@ class ServiceOrder(models.Model):
         CLOSED = "CLOSED", "Cerrado"
         REJECTED = "REJECTED", "No reparado/rechazado"
 
+    class NotificationChannel(models.TextChoices):
+        EMAIL = "EMAIL", "Correo electrónico"
+        WHATSAPP = "WHATSAPP", "WhatsApp"
+
     tracking_code = models.CharField(
         max_length=20,
         unique=True,
@@ -48,6 +52,31 @@ class ServiceOrder(models.Model):
 
     initial_observations = models.TextField(
         blank=True,
+    )
+
+    # HU-34: accesorios entregados junto con el equipo.
+    received_accessories = models.TextField(
+        blank=True,
+    )
+
+    # HU-34: abono recibido al momento del ingreso, si corresponde.
+    deposit_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal("0.00"),
+        validators=[
+            MinValueValidator(Decimal("0.00")),
+        ],
+    )
+
+    # HU-34 / HU-36 / HU-37: canal preferido para comunicaciones
+    # posteriores de esta orden. Puede quedar vacío en órdenes antiguas
+    # o mientras aún no se haya definido la preferencia del cliente.
+    preferred_notification_channel = models.CharField(
+        max_length=10,
+        choices=NotificationChannel.choices,
+        blank=True,
+        default="",
     )
 
     status = models.CharField(
@@ -105,6 +134,447 @@ class ServiceOrder(models.Model):
             f"{self.equipment.brand} {self.equipment.model}"
         )
 
+
+# HU-34: comprobante de recepción asociado a una orden.
+class OrderReceptionReceipt(models.Model):
+    order = models.OneToOneField(
+        ServiceOrder,
+        on_delete=models.PROTECT,
+        related_name="reception_receipt",
+    )
+
+    # Conserva una copia de los datos mostrados en el comprobante
+    # para que una reimpresión o reenvío mantenga la evidencia
+    # original de recepción aunque posteriormente cambie la orden.
+    snapshot = models.JSONField(
+        default=dict,
+    )
+
+    generated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reception_receipts_generated",
+    )
+
+    generated_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    def __str__(self):
+        return (
+            f"Comprobante de recepción - "
+            f"{self.order.tracking_code}"
+        )
+
+
+# HU-34: historial de entrega, impresión o preparación del comprobante.
+class OrderReceptionReceiptDelivery(models.Model):
+    class DeliveryMethod(models.TextChoices):
+        EMAIL = "EMAIL", "Correo electrónico"
+        WHATSAPP = "WHATSAPP", "WhatsApp"
+        PRINT = "PRINT", "Impreso"
+
+    class DeliveryStatus(models.TextChoices):
+        SENT = "SENT", "Enviado"
+        PREPARED = "PREPARED", "Preparado para envío"
+        PRINTED = "PRINTED", "Impreso"
+        FAILED = "FAILED", "Fallido"
+
+    receipt = models.ForeignKey(
+        OrderReceptionReceipt,
+        on_delete=models.PROTECT,
+        related_name="deliveries",
+    )
+
+    delivery_method = models.CharField(
+        max_length=10,
+        choices=DeliveryMethod.choices,
+    )
+
+    status = models.CharField(
+        max_length=10,
+        choices=DeliveryStatus.choices,
+    )
+
+    # Correo o teléfono utilizado. Para impresión puede quedar vacío.
+    destination = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    # Permite registrar información útil del intento sin modificar
+    # los datos originales de la orden ni del comprobante.
+    detail = models.TextField(
+        blank=True,
+    )
+
+    delivered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reception_receipt_deliveries",
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self):
+        return (
+            f"{self.receipt.order.tracking_code} - "
+            f"{self.get_delivery_method_display()} - "
+            f"{self.get_status_display()}"
+        )
+
+
+
+# HU-35: conversación de chat asociada a una orden de servicio.
+class OrderChatConversation(models.Model):
+    class Status(models.TextChoices):
+        NEW = "NEW", "Nuevo"
+        PENDING = "PENDING", "Pendiente de respuesta"
+        ANSWERED = "ANSWERED", "Respondido"
+        CLOSED = "CLOSED", "Cerrado"
+
+    # Una orden mantiene una única conversación para conservar todo el
+    # historial de comunicación en el mismo contexto.
+    order = models.OneToOneField(
+        ServiceOrder,
+        on_delete=models.PROTECT,
+        related_name="chat_conversation",
+    )
+
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+        default=Status.NEW,
+        db_index=True,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    closed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    closed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_chat_conversations_closed",
+    )
+
+    class Meta:
+        ordering = ["-updated_at", "-id"]
+
+    def save(self, *args, **kwargs):
+        # Mantiene coherentes los datos de cierre/reapertura.
+        if self.status == self.Status.CLOSED:
+            if self.closed_at is None:
+                self.closed_at = timezone.now()
+        else:
+            self.closed_at = None
+            self.closed_by = None
+
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"Chat {self.order.tracking_code} - "
+            f"{self.get_status_display()}"
+        )
+
+
+# HU-35: mensajes de texto dentro de una conversación de una orden.
+class OrderChatMessage(models.Model):
+    class SenderType(models.TextChoices):
+        CLIENT = "CLIENT", "Cliente"
+        STAFF = "STAFF", "Martini Cell"
+
+    conversation = models.ForeignKey(
+        OrderChatConversation,
+        on_delete=models.CASCADE,
+        related_name="messages",
+    )
+
+    sender_type = models.CharField(
+        max_length=10,
+        choices=SenderType.choices,
+    )
+
+    # Solo se utiliza para mensajes enviados por personal autenticado.
+    # Los mensajes del cliente se relacionan con el cliente a través
+    # de conversation.order.client, evitando crear una cuenta pública.
+    sender_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_chat_messages_sent",
+    )
+
+    body = models.TextField(
+        max_length=2000,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    # Marcas de lectura independientes para mantener trazabilidad real
+    # de qué lado de la conversación todavía tiene mensajes pendientes.
+    read_by_client_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    read_by_staff_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        indexes = [
+            models.Index(
+                fields=["conversation", "created_at"],
+                name="chat_msg_conv_created_idx",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+
+        self.body = (self.body or "").strip()
+
+        if not self.body:
+            raise ValidationError({
+                "body": "El mensaje no puede estar vacío."
+            })
+
+        if self.sender_type == self.SenderType.CLIENT:
+            if self.sender_user_id is not None:
+                raise ValidationError({
+                    "sender_user": (
+                        "Un mensaje del cliente no debe asociarse "
+                        "a un usuario interno."
+                    )
+                })
+
+        elif self.sender_type == self.SenderType.STAFF:
+            if self.sender_user_id is None:
+                raise ValidationError({
+                    "sender_user": (
+                        "Un mensaje de Martini Cell debe registrar "
+                        "el usuario que lo envió."
+                    )
+                })
+
+            if self.sender_user.role not in {"ADMIN", "TECH"}:
+                raise ValidationError({
+                    "sender_user": (
+                        "Solo un administrador o técnico puede "
+                        "responder el chat de una orden."
+                    )
+                })
+
+            if not self.sender_user.is_active:
+                raise ValidationError({
+                    "sender_user": (
+                        "El usuario que responde debe estar activo."
+                    )
+                })
+
+        if (
+            self.conversation_id
+            and self.conversation.status
+            == OrderChatConversation.Status.CLOSED
+        ):
+            raise ValidationError({
+                "conversation": (
+                    "La conversación está cerrada. "
+                    "Debe reabrirse antes de enviar nuevos mensajes."
+                )
+            })
+
+    def save(self, *args, **kwargs):
+        self.body = (self.body or "").strip()
+
+        # El emisor ya conoce el mensaje que acaba de enviar. La marca
+        # del lado contrario queda pendiente hasta que consulte el chat.
+        now = timezone.now()
+
+        if self.sender_type == self.SenderType.CLIENT:
+            if self.read_by_client_at is None:
+                self.read_by_client_at = now
+
+        elif self.sender_type == self.SenderType.STAFF:
+            if self.read_by_staff_at is None:
+                self.read_by_staff_at = now
+
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+        # Hace que el orden de la bandeja interna refleje la actividad
+        # más reciente incluso cuando solo se agrega un mensaje.
+        OrderChatConversation.objects.filter(
+            pk=self.conversation_id
+        ).update(updated_at=now)
+
+    def __str__(self):
+        return (
+            f"{self.conversation.order.tracking_code} - "
+            f"{self.get_sender_type_display()} - "
+            f"{self.created_at}"
+        )
+
+
+
+# HU-36: notificaciones al cliente originadas por respuestas del chat.
+class OrderChatNotification(models.Model):
+    class Status(models.TextChoices):
+        SENT = "SENT", "Enviado"
+        PREPARED = "PREPARED", "Preparado para envío"
+        FAILED = "FAILED", "Fallido"
+
+    order = models.ForeignKey(
+        ServiceOrder,
+        on_delete=models.PROTECT,
+        related_name="chat_notifications",
+    )
+
+    conversation = models.ForeignKey(
+        OrderChatConversation,
+        on_delete=models.PROTECT,
+        related_name="notifications",
+    )
+
+    message = models.ForeignKey(
+        OrderChatMessage,
+        on_delete=models.PROTECT,
+        related_name="notifications",
+    )
+
+    channel = models.CharField(
+        max_length=10,
+        choices=ServiceOrder.NotificationChannel.choices,
+    )
+
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+    )
+
+    # Correo o teléfono utilizado para el aviso.
+    destination = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    # Para WhatsApp conserva el mensaje preparado y el enlace wa.me.
+    # En correo normalmente ambos campos quedan vacíos.
+    prepared_message = models.TextField(
+        blank=True,
+    )
+
+    action_url = models.URLField(
+        max_length=1000,
+        blank=True,
+    )
+
+    # Resultado o detalle técnico del intento de notificación.
+    detail = models.TextField(
+        blank=True,
+    )
+
+    triggered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_chat_notifications_triggered",
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["message", "channel"],
+                name="unique_chat_notification_message_channel",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["order", "created_at"],
+                name="chat_notif_order_created_idx",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+
+        if self.message_id:
+            if (
+                self.message.sender_type
+                != OrderChatMessage.SenderType.STAFF
+            ):
+                raise ValidationError({
+                    "message": (
+                        "Solo una respuesta de Martini Cell puede "
+                        "originar una notificación al cliente."
+                    )
+                })
+
+            if (
+                self.conversation_id
+                and self.message.conversation_id
+                != self.conversation_id
+            ):
+                raise ValidationError({
+                    "conversation": (
+                        "La conversación indicada no corresponde "
+                        "al mensaje seleccionado."
+                    )
+                })
+
+        if self.conversation_id and self.order_id:
+            if self.conversation.order_id != self.order_id:
+                raise ValidationError({
+                    "order": (
+                        "La orden indicada no corresponde "
+                        "a la conversación seleccionada."
+                    )
+                })
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"{self.order.tracking_code} - "
+            f"{self.get_channel_display()} - "
+            f"{self.get_status_display()}"
+        )
 
 def order_evidence_upload_path(instance, filename):
     extension = Path(filename).suffix.lower()
@@ -370,6 +840,121 @@ class OrderStatusHistory(models.Model):
         return (
             f"{self.order.tracking_code}: "
             f"{self.from_status or 'INICIO'} → {self.to_status}"
+        )
+
+
+# HU-37: notificaciones al cliente originadas por cambios de estado.
+class OrderStatusNotification(models.Model):
+    class Status(models.TextChoices):
+        SENT = "SENT", "Enviado"
+        PREPARED = "PREPARED", "Preparado para envío"
+        FAILED = "FAILED", "Fallido"
+
+    order = models.ForeignKey(
+        ServiceOrder,
+        on_delete=models.PROTECT,
+        related_name="status_notifications",
+    )
+
+    status_history = models.ForeignKey(
+        OrderStatusHistory,
+        on_delete=models.PROTECT,
+        related_name="notifications",
+    )
+
+    channel = models.CharField(
+        max_length=10,
+        choices=ServiceOrder.NotificationChannel.choices,
+    )
+
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+    )
+
+    # Correo o teléfono utilizado para el aviso.
+    destination = models.CharField(
+        max_length=255,
+        blank=True,
+    )
+
+    # Para WhatsApp conserva el mensaje preparado y el enlace wa.me.
+    # En correo normalmente ambos campos quedan vacíos.
+    prepared_message = models.TextField(
+        blank=True,
+    )
+
+    action_url = models.URLField(
+        max_length=1000,
+        blank=True,
+    )
+
+    # Resultado o detalle técnico del intento de notificación.
+    detail = models.TextField(
+        blank=True,
+    )
+
+    triggered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="order_status_notifications_triggered",
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["status_history", "channel"],
+                name="unique_status_notification_history_channel",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["order", "created_at"],
+                name="status_notif_order_created_idx",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+
+        if self.status_history_id:
+            if (
+                self.order_id
+                and self.status_history.order_id != self.order_id
+            ):
+                raise ValidationError({
+                    "order": (
+                        "La orden indicada no corresponde "
+                        "al cambio de estado seleccionado."
+                    )
+                })
+
+            if not self.status_history.from_status:
+                raise ValidationError({
+                    "status_history": (
+                        "El registro inicial de la orden no puede "
+                        "originar una notificación HU-37."
+                    )
+                })
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"{self.order.tracking_code} - "
+            f"{self.status_history.from_status} → "
+            f"{self.status_history.to_status} - "
+            f"{self.get_channel_display()} - "
+            f"{self.get_status_display()}"
         )
 
 
