@@ -61,11 +61,18 @@ jobs:
           DJANGO_SECRET_KEY: clave-exclusiva-de-verificacion-de-despliegue-no-usar-en-host-123456789
           DJANGO_ALLOWED_HOSTS: martini.test
           DJANGO_PRIVATE_MEDIA_ROOT: ${{ runner.temp }}/martini-media
+          RAILWAY_SERVICE_ID: ensayo-ci
+          RAILWAY_VOLUME_MOUNT_PATH: ${{ runner.temp }}/martini-media
         run: |
           mkdir -p "$DJANGO_PRIVATE_MEDIA_ROOT"
           python backend/manage.py migrate --noinput
           python backend/manage.py collectstatic --noinput
           python deploy/check_host.py
+          if RAILWAY_VOLUME_MOUNT_PATH= python deploy/check_host.py 2> "$RUNNER_TEMP/host-sin-volumen.log"; then
+            echo "La comprobación aceptó un servicio Railway sin volumen" >&2
+            exit 1
+          fi
+          grep -q 'Railway necesita un volumen persistente' "$RUNNER_TEMP/host-sin-volumen.log"
       - name: Ejecutar pruebas de Django
         working-directory: backend
         run: python manage.py test --noinput
