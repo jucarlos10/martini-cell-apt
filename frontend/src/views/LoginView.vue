@@ -1,6 +1,6 @@
 
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { startSession } from '../services/auth'
 
@@ -10,6 +10,11 @@ const username = ref('')
 const password = ref('')
 const error = ref('')
 const loading = ref(false)
+const showPassword = ref(false)
+
+watch([username, password], () => {
+  error.value = ''
+})
 
 async function login() {
   if (loading.value) return
@@ -32,45 +37,71 @@ async function login() {
   <div class="login-wrap">
     <section class="login-panel">
       <form class="login-form" @submit.prevent="login">
-
-        <div class="mb-4">
-          <div class="fs-4 fw-bold" style="color: var(--mc-navy)">
-            <i class="bi bi-tools me-2"></i>
-            MARTINI CELL
-          </div>
-          <div class="mc-muted">
-            Gestión de servicios técnicos
+        <div class="login-brand">
+          <span class="login-brand-mark" aria-hidden="true">
+            <i class="bi bi-tools"></i>
+          </span>
+          <div>
+            <div class="login-brand-name">MARTINI CELL</div>
+            <div class="mc-muted small">Gestión de servicios técnicos</div>
           </div>
         </div>
 
-        <div v-if="error" class="alert alert-danger py-2" role="alert">
+        <div class="login-intro">
+          <p class="login-eyebrow">Acceso del equipo</p>
+          <h1>Bienvenido de nuevo</h1>
+          <p>Ingresa para revisar órdenes, responder consultas y continuar el trabajo del taller.</p>
+        </div>
+
+        <div
+          v-if="error"
+          id="login-error"
+          class="alert alert-danger py-2"
+          role="alert"
+        >
           {{ error }}
         </div>
 
-        <label for="username" class="form-label">Usuario</label>
+        <label for="username" class="form-label fw-semibold">Usuario</label>
         <input
           id="username"
           v-model="username"
-          class="form-control mb-3"
+          name="username"
+          class="form-control login-input mb-3"
           autocomplete="username"
+          :aria-describedby="error ? 'login-error' : undefined"
           required
           :disabled="loading"
         >
 
-        <label for="password" class="form-label">Contraseña</label>
-        <input
-          id="password"
-          v-model="password"
-          type="password"
-          class="form-control mb-3"
-          autocomplete="current-password"
-          required
-          :disabled="loading"
-        >
+        <label for="password" class="form-label fw-semibold">Contraseña</label>
+        <div class="password-field mb-4">
+          <input
+            id="password"
+            v-model="password"
+            name="password"
+            :type="showPassword ? 'text' : 'password'"
+            class="form-control login-input"
+            autocomplete="current-password"
+            :aria-describedby="error ? 'login-error' : undefined"
+            required
+            :disabled="loading"
+          >
+          <button
+            type="button"
+            class="password-toggle"
+            :aria-label="showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'"
+            :aria-pressed="showPassword"
+            :disabled="loading"
+            @click="showPassword = !showPassword"
+          >
+            <i :class="showPassword ? 'bi bi-eye-slash' : 'bi bi-eye'" aria-hidden="true"></i>
+          </button>
+        </div>
 
         <button
           type="submit"
-          class="btn btn-primary w-100"
+          class="btn btn-primary login-submit w-100"
           :disabled="loading"
         >
           <span
@@ -81,11 +112,11 @@ async function login() {
           {{ loading ? 'Iniciando sesión...' : 'Iniciar sesión' }}
         </button>
 
-        <div class="text-center my-3 text-muted">o</div>
+        <div class="login-separator"><span>¿Vienes a consultar una reparación?</span></div>
 
         <router-link
           to="/consulta"
-          class="btn btn-outline-primary w-100"
+          class="btn btn-outline-primary login-public-link w-100"
         >
           <i class="bi bi-search me-2"></i>
           Consultar reparación
@@ -95,14 +126,17 @@ async function login() {
     </section>
 
     <section class="login-hero">
-      <h2 class="display-6 fw-bold">
-        Reparamos.<br>
-        Conectamos.<br>
-        Acompañamos.
-      </h2>
-      <p class="opacity-75">
-        Plataforma de gestión de servicios técnicos.
-      </p>
+      <div class="login-hero-content">
+        <span class="login-hero-label">MARTINI CELL · PLATAFORMA DE GESTIÓN</span>
+        <h2>Una vista clara de cada reparación.</h2>
+        <p>Desde la recepción hasta la entrega, con el equipo y el cliente informados en cada etapa.</p>
+
+        <div class="login-hero-flow" aria-label="Etapas principales de la plataforma">
+          <div><i class="bi bi-box-arrow-in-down" aria-hidden="true"></i><span>Registrar el ingreso</span></div>
+          <div><i class="bi bi-activity" aria-hidden="true"></i><span>Seguir el avance</span></div>
+          <div><i class="bi bi-chat-dots" aria-hidden="true"></i><span>Responder consultas</span></div>
+        </div>
+      </div>
     </section>
   </div>
 </template>
