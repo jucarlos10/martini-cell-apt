@@ -1,0 +1,460 @@
+/* Ajustes visuales compartidos. Los flujos y colores de marca se conservan. */
+:root {
+  --mc-surface-shadow: 0 16px 40px rgb(16 42 67 / 7%);
+}
+
+.mc-card {
+  border-radius: 16px;
+  box-shadow: var(--mc-surface-shadow);
+}
+
+.btn {
+  border-radius: 9px;
+  font-weight: 600;
+}
+
+.btn-primary {
+  box-shadow: 0 5px 14px rgb(37 99 235 / 16%);
+}
+
+.btn-primary:hover {
+  background: #1c52c6;
+  border-color: #1c52c6;
+}
+
+:where(a, button, input, textarea, select):focus-visible {
+  outline: 3px solid #81b4ff;
+  outline-offset: 3px;
+}
+
+.form-control:focus,
+.form-select:focus {
+  border-color: #5d99ef;
+  box-shadow: 0 0 0 0.22rem rgb(37 99 235 / 15%);
+}
+
+.sidebar {
+  background: linear-gradient(175deg, #102a43 0%, #0b2036 100%);
+}
+
+.sidebar .brand {
+  border-bottom: 1px solid rgb(255 255 255 / 12%);
+  margin-bottom: 12px;
+  padding-bottom: 18px;
+}
+
+.sidebar a {
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.sidebar a:hover,
+.sidebar a:focus-visible {
+  background: rgb(255 255 255 / 13%);
+  color: #fff;
+}
+
+.sidebar a.router-link-active {
+  background: #2c65d9;
+  box-shadow: inset 3px 0 0 #a9d7ff;
+}
+
+.topbar {
+  box-shadow: 0 3px 14px rgb(16 42 67 / 4%);
+}
+
+/* Acceso del equipo */
+.login-wrap {
+  grid-template-columns: minmax(390px, 46%) 1fr;
+}
+
+.login-panel {
+  padding: clamp(28px, 5vw, 72px);
+}
+
+.login-form {
+  width: min(100%, 430px);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: clamp(34px, 6vh, 70px);
+}
+
+.login-brand-mark,
+.public-brand-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  background: #e8f1ff;
+  color: #1757c9;
+  font-size: 1.28rem;
+  flex: 0 0 auto;
+}
+
+.login-brand-name {
+  color: var(--mc-navy);
+  font-size: 1.1rem;
+  font-weight: 800;
+  letter-spacing: 0.035em;
+  line-height: 1.25;
+}
+
+.login-intro {
+  margin-bottom: 30px;
+}
+
+.login-eyebrow,
+.public-kicker {
+  color: #1554bd;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.login-intro h1 {
+  color: var(--mc-navy);
+  font-size: clamp(1.75rem, 3vw, 2.2rem);
+  font-weight: 800;
+  line-height: 1.15;
+  margin-bottom: 10px;
+}
+
+.login-intro > p:last-child {
+  color: #586a7c;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.login-input {
+  min-height: 48px;
+  border-radius: 10px;
+}
+
+.password-field {
+  position: relative;
+}
+
+.password-field .login-input {
+  padding-right: 56px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #4d6479;
+}
+
+.password-toggle:hover {
+  background: #eaf2ff;
+  color: #1757c9;
+}
+
+.login-submit,
+.login-public-link {
+  min-height: 48px;
+}
+
+.login-separator {
+  position: relative;
+  text-align: center;
+  margin: 25px 0;
+  color: #657486;
+  font-size: 0.84rem;
+}
+
+.login-separator::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  border-top: 1px solid #dbe4ee;
+}
+
+.login-separator span {
+  position: relative;
+  background: #fff;
+  padding: 0 12px;
+}
+
+.login-hero {
+  position: relative;
+  justify-content: center;
+  overflow: hidden;
+  background: radial-gradient(circle at 85% 15%, #1d4f7e 0%, transparent 42%),
+    linear-gradient(155deg, #102a43 0%, #0a1e33 100%);
+  padding: clamp(48px, 7vw, 110px);
+}
+
+.login-hero::before,
+.login-hero::after {
+  content: '';
+  position: absolute;
+  border: 1px solid rgb(184 218 252 / 15%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.login-hero::before {
+  width: 560px;
+  height: 560px;
+  right: -190px;
+  top: -250px;
+}
+
+.login-hero::after {
+  width: 360px;
+  height: 360px;
+  left: -180px;
+  bottom: -220px;
+}
+
+.login-hero-content {
+  position: relative;
+  z-index: 1;
+  max-width: 540px;
+}
+
+.login-hero-label {
+  display: inline-block;
+  margin-bottom: 28px;
+  color: #a8d5ff;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.login-hero h2 {
+  max-width: 500px;
+  font-size: clamp(2.25rem, 4.2vw, 4rem);
+  font-weight: 800;
+  line-height: 1.1;
+  margin: 0 0 18px;
+}
+
+.login-hero-content > p {
+  color: #c5d8e8;
+  font-size: 1.05rem;
+  line-height: 1.6;
+  max-width: 470px;
+}
+
+.login-hero-flow {
+  display: grid;
+  gap: 12px;
+  max-width: 400px;
+  margin-top: 38px;
+}
+
+.login-hero-flow > div {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 13px 15px;
+  border: 1px solid rgb(190 221 250 / 20%);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 7%);
+  color: #f4f9ff;
+  font-weight: 600;
+}
+
+.login-hero-flow i {
+  color: #9bd5ff;
+  font-size: 1.2rem;
+}
+
+/* Consulta del cliente */
+.public-page {
+  background: radial-gradient(circle at 50% -10%, #e3efff 0, transparent 48%), #f3f7fb;
+}
+
+.mobile-public {
+  max-width: 760px;
+}
+
+.public-header {
+  padding: 4px 2px;
+}
+
+.public-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  color: var(--mc-navy);
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.025em;
+}
+
+.public-brand-mark {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  font-size: 1.08rem;
+}
+
+.public-login-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 9px;
+  color: #1554bd;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.public-login-link:hover {
+  background: #e4efff;
+}
+
+.public-search-card,
+.public-result-card {
+  border: 1px solid #d9e5f1;
+  box-shadow: 0 18px 45px rgb(16 42 67 / 8%);
+}
+
+.public-search-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.public-search-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, #2462d5, #52b6db);
+}
+
+.public-heading {
+  color: var(--mc-navy);
+  font-size: clamp(1.65rem, 4vw, 2.25rem);
+  font-weight: 800;
+  line-height: 1.15;
+  margin: 0 0 12px;
+}
+
+.public-lead {
+  color: #52657a;
+  line-height: 1.55;
+  max-width: 580px;
+  margin-bottom: 25px;
+}
+
+.public-search-form .form-label {
+  color: #30465b;
+  font-weight: 700;
+}
+
+.public-search-form .form-control,
+.public-search-form .btn {
+  min-height: 50px;
+}
+
+.public-search-form .form-control {
+  border-radius: 9px;
+  letter-spacing: 0.035em;
+}
+
+.public-input-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: #52657a;
+  font-size: 0.83rem;
+  line-height: 1.4;
+}
+
+.public-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 22px 0 8px;
+}
+
+.public-steps > div {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px;
+  border: 1px solid #dfe9f3;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 72%);
+}
+
+.public-steps span {
+  display: inline-grid;
+  place-items: center;
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  background: #e3efff;
+  color: #1554bd;
+  font-size: 0.82rem;
+  font-weight: 800;
+  flex: 0 0 auto;
+}
+
+.public-steps p {
+  color: #40566b;
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.public-page .public-result-card .current-status-card {
+  border-color: #c8dcf6;
+  background: linear-gradient(120deg, #edf5ff, #f8fbff);
+}
+
+.public-privacy-note {
+  color: #5a6c7d;
+  font-size: 0.81rem;
+  line-height: 1.5;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.public-privacy-note i {
+  color: #1b65b5;
+  margin-right: 5px;
+}
+
+@media (max-width: 900px) {
+  .login-wrap { grid-template-columns: 1fr; }
+  .login-panel { min-height: 100vh; }
+  .login-hero { display: none; }
+}
+
+@media (max-width: 575.98px) {
+  .public-page { padding-top: 18px !important; }
+  .public-search-card,
+  .public-result-card { padding: 22px !important; }
+  .public-steps { grid-template-columns: 1fr; gap: 7px; }
+  .public-steps > div { padding: 9px 11px; }
+  .login-panel { padding: 28px 22px; }
+  .login-brand { margin-bottom: 48px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar a { transition: none; }
+}
