@@ -26,6 +26,7 @@ from accounts.permissions import (
     IsAdminOrTechRole,
 )
 
+from .email_service import send_email
 from .models import (
     OrderChatConversation,
     OrderChatMessage,
@@ -1856,22 +1857,24 @@ def _notify_status_change(status_history, user):
             return _serialize_status_notification(notification)
 
         try:
-            email = EmailMessage(
-                subject=(
-                    "Martini Cell - Estado actualizado "
-                    f"{order.tracking_code}"
-                ),
-                body=_status_notification_email_body(
-                    order,
-                    status_history,
-                ),
-                to=[destination],
+            subject = (
+                "Martini Cell - Estado actualizado "
+                f"{order.tracking_code}"
             )
-            sent_count = email.send(using="default")
+            body = _status_notification_email_body(
+                order,
+                status_history,
+            )
 
-            if sent_count != 1:
+            send_result = send_email(
+                to=destination,
+                subject=subject,
+                html=body.replace("\n", "<br>"),
+            )
+
+            if not send_result or not send_result.get("id"):
                 raise RuntimeError(
-                    "El servicio de correo no confirmó el envío."
+                    "Resend no confirmó el envío."
                 )
 
         except Exception as error:
@@ -1994,7 +1997,6 @@ def _notify_status_change(status_history, user):
             f"https://wa.me/{destination}"
             f"?text={quote(prepared_message)}"
         )
-
         if cloud_api_error:
             detail = (
                 "WhatsApp Cloud API no pudo completar el envío. "
