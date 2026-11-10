@@ -518,19 +518,21 @@ class OrderReceptionReceiptDeliveryView(APIView):
         )
 
         try:
-            email = EmailMessage(
-                subject=(
-                    "Martini Cell - Comprobante de recepción "
-                    f"{order.tracking_code}"
-                ),
-                body=_receipt_email_body(receipt),
-                to=[destination],
+            subject = (
+                "Martini Cell - Comprobante de recepción "
+                f"{order.tracking_code}"
             )
-            sent_count = email.send(using="default")
+            body = _receipt_email_body(receipt)
 
-            if sent_count != 1:
+            send_result = send_email(
+                to=destination,
+                subject=subject,
+                html=body.replace("\n", "<br>"),
+            )
+
+            if not send_result or not send_result.get("id"):
                 raise RuntimeError(
-                    "El servicio de correo no confirmó el envío."
+                    "Resend no confirmó el envío."
                 )
 
         except Exception as error:

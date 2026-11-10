@@ -364,12 +364,12 @@ class OrderReceptionReceiptTests(APITestCase):
         )
 
     @patch(
-        "orders.views.EmailMessage.send",
-        return_value=1,
+        "orders.views.send_email",
+        return_value={"id": "resend-test-hu34-001"},
     )
     def test_email_delivery_sets_preferred_channel_and_history(
         self,
-        mocked_send,
+        mocked_send_email,
     ):
         order = self.create_order()
 
@@ -420,17 +420,28 @@ class OrderReceptionReceiptTests(APITestCase):
             self.admin,
         )
 
-        mocked_send.assert_called_once_with(
-            using="default"
+        mocked_send_email.assert_called_once()
+        kwargs = mocked_send_email.call_args.kwargs
+        self.assertEqual(
+            kwargs["to"],
+            self.customer.email,
+        )
+        self.assertIn(
+            order.tracking_code,
+            kwargs["subject"],
+        )
+        self.assertIn(
+            order.tracking_code,
+            kwargs["html"],
         )
 
     @patch(
-        "orders.views.EmailMessage.send",
-        side_effect=RuntimeError("SMTP no disponible"),
+        "orders.views.send_email",
+        side_effect=RuntimeError("Resend no disponible"),
     )
     def test_email_failure_does_not_delete_order(
         self,
-        mocked_send,
+        mocked_send_email,
     ):
         order = self.create_order()
 
@@ -472,13 +483,11 @@ class OrderReceptionReceiptTests(APITestCase):
             OrderReceptionReceiptDelivery.DeliveryStatus.FAILED,
         )
         self.assertIn(
-            "SMTP no disponible",
+            "Resend no disponible",
             delivery.detail,
         )
 
-        mocked_send.assert_called_once_with(
-            using="default"
-        )
+        mocked_send_email.assert_called_once()
 
     def test_email_delivery_requires_registered_email(self):
         customer = Client.objects.create(
