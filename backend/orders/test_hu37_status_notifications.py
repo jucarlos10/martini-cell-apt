@@ -134,12 +134,12 @@ class OrderStatusNotificationTests(APITestCase):
         )
 
     @patch(
-        "orders.views.EmailMessage.send",
-        return_value=1,
+        "orders.views.send_email",
+        return_value={"id": "resend-test-001"},
     )
     def test_email_status_change_creates_sent_notification(
         self,
-        mocked_send,
+        mocked_send_email,
     ):
         order = self.create_order()
         self.set_preferred_channel(
@@ -196,17 +196,15 @@ class OrderStatusNotificationTests(APITestCase):
             OrderStatusNotification.Status.SENT,
         )
 
-        mocked_send.assert_called_once_with(
-            using="default"
-        )
+        mocked_send_email.assert_called_once()
 
     @patch(
-        "orders.views.EmailMessage.send",
-        side_effect=RuntimeError("SMTP no disponible"),
+        "orders.views.send_email",
+        side_effect=RuntimeError("Resend no disponible"),
     )
     def test_email_failure_keeps_status_and_history(
         self,
-        mocked_send,
+        mocked_send_email,
     ):
         order = self.create_order()
         self.set_preferred_channel(
@@ -250,13 +248,11 @@ class OrderStatusNotificationTests(APITestCase):
             OrderStatusNotification.Status.FAILED,
         )
         self.assertIn(
-            "SMTP no disponible",
+            "Resend no disponible",
             notification.detail,
         )
 
-        mocked_send.assert_called_once_with(
-            using="default"
-        )
+        mocked_send_email.assert_called_once()
 
     def test_whatsapp_status_change_is_prepared(self):
         order = self.create_order()
@@ -617,13 +613,14 @@ class OrderStatusNotificationTests(APITestCase):
             ServiceOrder.NotificationChannel.WHATSAPP,
         )
 
-    @patch("orders.views.EmailMessage")
+    @patch(
+        "orders.views.send_email",
+        return_value={"id": "resend-test-content"},
+    )
     def test_email_content_uses_tracking_code_and_avoids_internal_note(
         self,
-        mocked_email_message,
+        mocked_send_email,
     ):
-        mocked_email = mocked_email_message.return_value
-        mocked_email.send.return_value = 1
 
         order = self.create_order()
         self.set_preferred_channel(
@@ -645,10 +642,10 @@ class OrderStatusNotificationTests(APITestCase):
             status.HTTP_200_OK,
         )
 
-        mocked_email_message.assert_called_once()
+        mocked_send_email.assert_called_once()
 
-        kwargs = mocked_email_message.call_args.kwargs
-        body = kwargs["body"]
+        kwargs = mocked_send_email.call_args.kwargs
+        body = kwargs["html"]
 
         self.assertIn(
             order.tracking_code,
@@ -665,8 +662,4 @@ class OrderStatusNotificationTests(APITestCase):
         self.assertNotIn(
             "25000",
             body,
-        )
-
-        mocked_email.send.assert_called_once_with(
-            using="default"
         )
