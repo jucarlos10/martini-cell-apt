@@ -120,8 +120,8 @@ class OrderChatNotificationTests(APITestCase):
         )
 
     @patch(
-        "orders.views.EmailMessage.send",
-        return_value=1,
+        "orders.views.send_email",
+        return_value={"id": "resend-chat-test"},
     )
     def test_email_reply_creates_sent_notification(
         self,
@@ -184,13 +184,11 @@ class OrderChatNotificationTests(APITestCase):
             OrderChatNotification.Status.SENT,
         )
 
-        mocked_send.assert_called_once_with(
-            using="default"
-        )
+        mocked_send.assert_called_once()
 
     @patch(
-        "orders.views.EmailMessage.send",
-        side_effect=RuntimeError("SMTP no disponible"),
+        "orders.views.send_email",
+        side_effect=RuntimeError("Resend no disponible"),
     )
     def test_email_failure_keeps_chat_message_and_records_failure(
         self,
@@ -233,7 +231,7 @@ class OrderChatNotificationTests(APITestCase):
             OrderChatNotification.Status.FAILED,
         )
         self.assertIn(
-            "SMTP no disponible",
+            "Resend no disponible",
             notification.detail,
         )
 
@@ -244,9 +242,7 @@ class OrderChatNotificationTests(APITestCase):
             OrderChatConversation.Status.ANSWERED,
         )
 
-        mocked_send.assert_called_once_with(
-            using="default"
-        )
+        mocked_send.assert_called_once()
 
     def test_whatsapp_reply_is_prepared_with_tracking_code(self):
         conversation = self.create_conversation()
@@ -460,8 +456,8 @@ class OrderChatNotificationTests(APITestCase):
         )
 
     @patch(
-        "orders.views.EmailMessage.send",
-        return_value=1,
+        "orders.views.send_email",
+        return_value={"id": "resend-chat-test"},
     )
     def test_internal_detail_exposes_notification_history(
         self,
@@ -510,13 +506,11 @@ class OrderChatNotificationTests(APITestCase):
             OrderChatNotification.Status.SENT,
         )
 
-        mocked_send.assert_called_once_with(
-            using="default"
-        )
+        mocked_send.assert_called_once()
 
     @patch(
-        "orders.views.EmailMessage.send",
-        return_value=1,
+        "orders.views.send_email",
+        return_value={"id": "resend-chat-test"},
     )
     def test_public_chat_does_not_expose_notification_history(
         self,
@@ -563,9 +557,7 @@ class OrderChatNotificationTests(APITestCase):
             str(response.data),
         )
 
-        mocked_send.assert_called_once_with(
-            using="default"
-        )
+        mocked_send.assert_called_once()
 
     def test_notification_model_rejects_client_message(self):
         conversation = self.create_conversation()
@@ -646,8 +638,8 @@ class OrderChatNotificationTests(APITestCase):
         )
 
     @patch(
-        "orders.views.EmailMessage.send",
-        return_value=1,
+        "orders.views.send_email",
+        return_value={"id": "resend-chat-test"},
     )
     def test_email_notice_uses_same_tracking_code(
         self,
@@ -686,6 +678,4 @@ class OrderChatNotificationTests(APITestCase):
             response.data["notification_result"],
         )
 
-        mocked_send.assert_called_once_with(
-            using="default"
-        )
+        mocked_send.assert_called_once()
