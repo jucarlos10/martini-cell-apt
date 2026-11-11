@@ -15,6 +15,7 @@ class Migration(migrations.Migration):
             name="client_identification_number_snapshot",
             field=models.CharField(
                 blank=True,
+                default="",
                 editable=False,
                 max_length=50,
             ),
@@ -24,6 +25,7 @@ class Migration(migrations.Migration):
             name="client_identification_type_snapshot",
             field=models.CharField(
                 blank=True,
+                default="",
                 editable=False,
                 max_length=20,
             ),
