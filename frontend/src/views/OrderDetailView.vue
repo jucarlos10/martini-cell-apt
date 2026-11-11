@@ -115,6 +115,34 @@ const sensitiveRelationChanged = computed(() =>
   Number(sensitiveOrderForm.value.equipment) !== Number(order.value?.equipment)
 )
 
+function clientIdentificationLabel(client) {
+  if (!client) return 'Sin documento'
+
+  if (client.identification_type === 'RUT') {
+    const clean = String(client.rut || '')
+    const verifier = clean.slice(-1)
+    const body = clean.slice(0, -1)
+    const formattedBody = body.replace(
+      /\B(?=(\d{3})+(?!\d))/g,
+      '.'
+    )
+
+    return clean
+      ? `RUT chileno: ${formattedBody}-${verifier}`
+      : 'RUT chileno: No registrado'
+  }
+
+  if (client.identification_type === 'PASSPORT') {
+    return `Pasaporte: ${client.document_number || 'No registrado'}`
+  }
+
+  if (client.identification_type === 'FOREIGN_DOCUMENT') {
+    return `Documento extranjero: ${client.document_number || 'No registrado'}`
+  }
+
+  return 'Sin documento'
+}
+
 function notificationDisplayDetail(detail) {
   const value = String(detail || '').trim()
 
@@ -4233,7 +4261,7 @@ watch(
                       :key="client.id"
                       :value="client.id"
                     >
-                      {{ client.name }} · {{ client.rut }}
+                      {{ client.name }} · {{ clientIdentificationLabel(client) }}
                     </option>
                   </select>
                 </div>
