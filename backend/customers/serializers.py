@@ -69,6 +69,10 @@ class ClientSerializer(serializers.ModelSerializer):
             "created_by_username",
             "updated_by_username",
         )
+        # La unicidad condicional de tipo + documento se valida de forma
+        # explícita en validate() para permitir RUT y "Sin documento"
+        # sin exigir document_number.
+        validators = []
 
     def validate_rut(self, value):
         if value in {None, ""}:
