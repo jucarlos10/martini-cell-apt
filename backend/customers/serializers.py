@@ -46,6 +46,7 @@ class ClientSerializer(serializers.ModelSerializer):
         model = Client
         fields = (
             "id",
+            "client_code",
             "identification_type",
             "identification_type_display",
             "rut",
@@ -62,6 +63,7 @@ class ClientSerializer(serializers.ModelSerializer):
         )
         read_only_fields = (
             "id",
+            "client_code",
             "identification_type_display",
             "identification_display",
             "created_at",
