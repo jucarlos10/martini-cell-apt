@@ -4,11 +4,16 @@ import { computed, onMounted, ref } from 'vue'
 import AdminLayout from '../layouts/AdminLayout.vue'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
-import { authenticatedFetch } from '../services/auth'
+import { authenticatedFetch, getCurrentUser } from '../services/auth'
 
 const orders = ref([])
 const search = ref('')
 const selectedStatus = ref('')
+
+const currentUser = getCurrentUser()
+const canUseTechnicalActions = ['ADMIN', 'TECH'].includes(
+  currentUser?.role,
+)
 
 // Filtro por fecha de ingreso.
 const dateMode = ref('single')
@@ -134,6 +139,41 @@ function formatDate(value, includeTime = false) {
         }
       : {}),
   }).format(date)
+}
+
+function warrantyBadgeClass(summary) {
+  return {
+    ACTIVE: 'text-bg-success',
+    EXPIRED: 'text-bg-secondary',
+    NOT_STARTED: 'text-bg-info',
+    NOT_APPLICABLE: 'bg-light text-dark border',
+    MULTIPLE: 'text-bg-primary',
+  }[summary?.status] || 'bg-light text-dark border'
+}
+
+function warrantyRoute(order) {
+  return {
+    path: `/ordenes/${order.id}`,
+    query: { tab: 'garantia' },
+  }
+}
+
+function chatRoute(order) {
+  if (order.chat_conversation_id) {
+    return {
+      path: '/chat',
+      query: {
+        conversation: String(order.chat_conversation_id),
+      },
+    }
+  }
+
+  return {
+    path: '/chat',
+    query: {
+      tracking: order.tracking_code,
+    },
+  }
 }
 
 // Consultar las órdenes registradas en PostgreSQL.
@@ -353,15 +393,17 @@ onMounted(loadOrders)
               <th>Cliente</th>
               <th>Equipo</th>
               <th>Estado</th>
+              <th>Garantía</th>
               <th>Registrado por</th>
               <th>Ingreso</th>
               <th>Actualización</th>
+              <th class="text-center">Chat</th>
             </tr>
           </thead>
 
           <tbody>
             <tr v-if="loading">
-              <td colspan="7" class="text-center py-4">
+              <td colspan="9" class="text-center py-4">
                 <div
                   class="spinner-border text-primary mb-2"
                   role="status"
@@ -375,7 +417,7 @@ onMounted(loadOrders)
 
             <tr v-else-if="filteredOrders.length === 0">
               <td
-                colspan="7"
+                colspan="9"
                 class="empty-state text-center"
               >
                 {{
@@ -423,6 +465,29 @@ onMounted(loadOrders)
               </td>
 
               <td>
+                <router-link
+                  v-if="order.warranty_summary"
+                  :to="warrantyRoute(order)"
+                  class="text-decoration-none"
+                  :title="`Abrir garantías de ${order.tracking_code}`"
+                >
+                  <span
+                    class="badge"
+                    :class="warrantyBadgeClass(order.warranty_summary)"
+                  >
+                    {{ order.warranty_summary.status_display }}
+                  </span>
+                </router-link>
+
+                <span
+                  v-else
+                  class="small text-muted"
+                >
+                  Sin acceso
+                </span>
+              </td>
+
+              <td>
                 {{
                   order.created_by_username ||
                   'No disponible'
@@ -435,6 +500,37 @@ onMounted(loadOrders)
 
               <td>
                 {{ formatDate(order.updated_at, true) }}
+              </td>
+
+              <td class="text-center">
+                <router-link
+                  v-if="canUseTechnicalActions"
+                  :to="chatRoute(order)"
+                  class="btn btn-sm btn-outline-primary"
+                  :title="
+                    order.chat_conversation_id
+                      ? 'Abrir conversación'
+                      : 'Iniciar conversación'
+                  "
+                  :aria-label="
+                    order.chat_conversation_id
+                      ? `Abrir chat de ${order.client_name}`
+                      : `Iniciar chat con ${order.client_name}`
+                  "
+                >
+                  <i
+                    class="bi bi-chat-dots"
+                    aria-hidden="true"
+                  ></i>
+                </router-link>
+
+                <span
+                  v-else
+                  class="text-muted"
+                  aria-hidden="true"
+                >
+                  —
+                </span>
               </td>
             </tr>
           </tbody>
