@@ -39,7 +39,8 @@ class ClientListCreateView(ListCreateAPIView):
         normalized_rut = normalize_rut(search)
 
         filters = (
-            Q(name__icontains=search)
+            Q(client_code__icontains=search)
+            | Q(name__icontains=search)
             | Q(phone__icontains=search)
             | Q(email__icontains=search)
             | Q(document_number__icontains=search)
