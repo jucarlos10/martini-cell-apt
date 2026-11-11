@@ -6,10 +6,13 @@ import {
   onMounted,
   ref,
 } from 'vue'
+import { useRoute } from 'vue-router'
 
 import AdminLayout from '../layouts/AdminLayout.vue'
 import PageHeader from '../components/PageHeader.vue'
 import { authenticatedFetch } from '../services/auth'
+
+const route = useRoute()
 
 const conversations = ref([])
 const selectedConversation = ref(null)
@@ -654,6 +657,45 @@ async function refreshAll() {
   }
 }
 
+async function openRouteTarget() {
+  const conversationId = Number(route.query.conversation || 0)
+  const trackingCode = String(
+    route.query.tracking || '',
+  ).trim().toUpperCase()
+
+  if (Number.isInteger(conversationId) && conversationId > 0) {
+    const conversation = conversations.value.find(
+      (item) => Number(item.id) === conversationId,
+    )
+
+    if (conversation) {
+      await selectConversation(conversation)
+      return
+    }
+
+    selectedConversationId.value = conversationId
+    selectedConversation.value = null
+    await loadConversation(conversationId)
+    await loadConversations({ silent: true })
+    return
+  }
+
+  if (!trackingCode) return
+
+  const conversation = conversations.value.find(
+    (item) =>
+      String(item.tracking_code || '').toUpperCase() === trackingCode,
+  )
+
+  if (conversation) {
+    await selectConversation(conversation)
+    return
+  }
+
+  newConversationTrackingCode.value = trackingCode
+  startConversationError.value = ''
+}
+
 function startPolling() {
   stopPolling()
 
@@ -678,6 +720,7 @@ function stopPolling() {
 
 onMounted(async () => {
   await loadConversations()
+  await openRouteTarget()
   startPolling()
 })
 

@@ -3571,6 +3571,17 @@ function selectTab(key) {
   }
 }
 
+function openRequestedTab(value) {
+  const requestedKey = String(value || '').trim()
+  const target = tabs.find(
+    (item) => item.key === requestedKey && item.enabled,
+  )
+
+  if (!target) return
+
+  selectTab(target.key)
+}
+
 function selectEvidenceFile(event) {
   evidenceFile.value = event.target.files?.[0] || null
   uploadError.value = ''
@@ -4083,8 +4094,24 @@ async function loadOrder() {
   }
 }
 
-// Permite cambiar entre /ordenes/1 y /ordenes/2 sin mostrar datos antiguos.
-watch(() => route.params.id, loadOrder, { immediate: true })
+// Permite cambiar entre órdenes y abrir una pestaña específica desde enlaces externos.
+watch(
+  () => route.params.id,
+  async () => {
+    await loadOrder()
+    openRequestedTab(route.query.tab)
+  },
+  { immediate: true },
+)
+
+watch(
+  () => route.query.tab,
+  (requestedTab) => {
+    if (order.value) {
+      openRequestedTab(requestedTab)
+    }
+  },
+)
 </script>
 
 <template>
