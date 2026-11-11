@@ -6478,8 +6478,12 @@ watch(
                       {{ requestItem.client_name || 'No disponible' }}
                     </div>
                     <div class="col-sm-6">
-                      <strong>RUT:</strong>
-                      {{ requestItem.client_rut || 'No disponible' }}
+                      <strong>Identificación:</strong>
+                      {{
+                        requestItem.client_identification ||
+                        requestItem.client_rut ||
+                        'No disponible'
+                      }}
                     </div>
                   </div>
 
@@ -7020,8 +7024,9 @@ watch(
             <div id="warranty-request-form" class="mc-card p-4">
               <h5>Ingresar solicitud de garantía</h5>
               <p class="small text-muted">
-                El nombre y RUT del cliente se obtienen automáticamente desde la
-                orden. No es necesario volver a ingresarlos.
+                El nombre y la identificación del cliente se obtienen
+                automáticamente desde la orden. No es necesario volver a
+                ingresarlos.
               </p>
 
               <div
