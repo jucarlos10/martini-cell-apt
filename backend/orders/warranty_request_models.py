@@ -68,7 +68,21 @@ class WarrantyRequest(models.Model):
     )
     concurrent_open_reason = models.TextField(blank=True)
     client_name_snapshot = models.CharField(max_length=150, editable=False)
-    client_rut_snapshot = models.CharField(max_length=20, editable=False)
+    client_rut_snapshot = models.CharField(
+        max_length=20,
+        blank=True,
+        editable=False,
+    )
+    client_identification_type_snapshot = models.CharField(
+        max_length=20,
+        blank=True,
+        editable=False,
+    )
+    client_identification_number_snapshot = models.CharField(
+        max_length=50,
+        blank=True,
+        editable=False,
+    )
     evidence = models.ImageField(
         upload_to=warranty_request_evidence_upload_path,
         validators=[
@@ -162,11 +176,28 @@ class WarrantyRequest(models.Model):
 
     def save(self, *args, **kwargs):
         if self.order_id:
-            if not self.client_name_snapshot:
-                self.client_name_snapshot = self.order.client.name
+            client = self.order.client
 
-            if not self.client_rut_snapshot:
-                self.client_rut_snapshot = self.order.client.rut
+            if not self.client_name_snapshot:
+                self.client_name_snapshot = client.name
+
+            if not self.client_identification_type_snapshot:
+                self.client_identification_type_snapshot = (
+                    client.identification_type
+                )
+
+            if (
+                not self.client_identification_number_snapshot
+                and client.identification_value
+            ):
+                self.client_identification_number_snapshot = (
+                    client.identification_value
+                )
+
+            # Compatibilidad con las solicitudes históricas y consumidores
+            # que todavía leen el campo específico de RUT.
+            if not self.client_rut_snapshot and client.rut:
+                self.client_rut_snapshot = client.rut
 
         if self.created_by_id and not self.created_by_username:
             self.created_by_username = self.created_by.get_username()
