@@ -115,6 +115,42 @@ const sensitiveRelationChanged = computed(() =>
   Number(sensitiveOrderForm.value.equipment) !== Number(order.value?.equipment)
 )
 
+function notificationDisplayDetail(detail) {
+  const value = String(detail || '').trim()
+
+  if (!value) return ''
+
+  if (!value.includes('ID de Meta:')) {
+    return value
+  }
+
+  if (
+    value.startsWith(
+      'Comprobante enviado mediante WhatsApp Cloud API.'
+    )
+  ) {
+    return 'Comprobante enviado correctamente mediante WhatsApp.'
+  }
+
+  if (
+    value.startsWith(
+      'Aviso de cambio de estado enviado mediante WhatsApp Cloud API.'
+    )
+  ) {
+    return 'Aviso de cambio de estado enviado correctamente mediante WhatsApp.'
+  }
+
+  if (
+    value.startsWith(
+      'Aviso de nueva respuesta enviado mediante WhatsApp Cloud API.'
+    )
+  ) {
+    return 'Aviso de nueva respuesta enviado correctamente mediante WhatsApp.'
+  }
+
+  return value.replace(/\s*ID de Meta:.*$/i, '').trim()
+}
+
 function syncSensitiveOrderForm() {
   if (!order.value) {
     sensitiveOrderForm.value = emptySensitiveOrderForm()
@@ -4863,10 +4899,10 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                       </div>
 
                       <div
-                        v-if="item.detail"
+                        v-if="notificationDisplayDetail(item.detail)"
                         class="small text-muted mt-1"
                       >
-                        {{ item.detail }}
+                        {{ notificationDisplayDetail(item.detail) }}
                       </div>
                     </div>
                   </div>
@@ -5142,10 +5178,10 @@ watch(() => route.params.id, loadOrder, { immediate: true })
                     </div>
 
                     <div
-                      v-if="notification.detail"
+                      v-if="notificationDisplayDetail(notification.detail)"
                       class="text-muted mt-1"
                     >
-                      {{ notification.detail }}
+                      {{ notificationDisplayDetail(notification.detail) }}
                     </div>
 
                     <div class="text-muted mt-1">
@@ -5219,10 +5255,10 @@ watch(() => route.params.id, loadOrder, { immediate: true })
               </div>
 
               <div
-                v-if="statusNotificationFeedback.detail"
+                v-if="notificationDisplayDetail(statusNotificationFeedback.detail)"
                 class="mt-1"
               >
-                {{ statusNotificationFeedback.detail }}
+                {{ notificationDisplayDetail(statusNotificationFeedback.detail) }}
               </div>
 
               <a

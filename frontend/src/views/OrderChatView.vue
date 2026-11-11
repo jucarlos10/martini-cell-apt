@@ -75,6 +75,42 @@ function formatDate(value) {
   }).format(date)
 }
 
+function notificationDisplayDetail(detail) {
+  const value = String(detail || '').trim()
+
+  if (!value) return ''
+
+  if (!value.includes('ID de Meta:')) {
+    return value
+  }
+
+  if (
+    value.startsWith(
+      'Comprobante enviado mediante WhatsApp Cloud API.'
+    )
+  ) {
+    return 'Comprobante enviado correctamente mediante WhatsApp.'
+  }
+
+  if (
+    value.startsWith(
+      'Aviso de cambio de estado enviado mediante WhatsApp Cloud API.'
+    )
+  ) {
+    return 'Aviso de cambio de estado enviado correctamente mediante WhatsApp.'
+  }
+
+  if (
+    value.startsWith(
+      'Aviso de nueva respuesta enviado mediante WhatsApp Cloud API.'
+    )
+  ) {
+    return 'Aviso de nueva respuesta enviado correctamente mediante WhatsApp.'
+  }
+
+  return value.replace(/\s*ID de Meta:.*$/i, '').trim()
+}
+
 function statusBadgeClass(status) {
   return {
     NEW: 'text-bg-primary',
@@ -1354,10 +1390,10 @@ onBeforeUnmount(() => {
                   </div>
 
                   <div
-                    v-if="notification.detail"
+                    v-if="notificationDisplayDetail(notification.detail)"
                     class="small mt-2"
                   >
-                    {{ notification.detail }}
+                    {{ notificationDisplayDetail(notification.detail) }}
                   </div>
 
                   <div
