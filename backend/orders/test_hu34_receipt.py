@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from django.test import override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -15,6 +16,7 @@ from .models import (
 )
 
 
+@override_settings(FRONTEND_PUBLIC_URL="https://martinicell.cl")
 class OrderReceptionReceiptTests(APITestCase):
 
     def setUp(self):
@@ -434,6 +436,13 @@ class OrderReceptionReceiptTests(APITestCase):
             order.tracking_code,
             kwargs["html"],
         )
+        self.assertIn(
+            (
+                "https://martinicell.cl/consulta?codigo="
+                f"{order.tracking_code}"
+            ),
+            kwargs["html"],
+        )
 
     @patch(
         "orders.views.send_email",
@@ -566,6 +575,13 @@ class OrderReceptionReceiptTests(APITestCase):
         )
         self.assertIn(
             order.tracking_code,
+            response.data["message"],
+        )
+        self.assertIn(
+            (
+                "https://martinicell.cl/consulta?codigo="
+                f"{order.tracking_code}"
+            ),
             response.data["message"],
         )
 

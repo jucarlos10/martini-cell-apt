@@ -20,6 +20,7 @@ from .whatsapp_cloud import (
 )
 
 
+@override_settings(FRONTEND_PUBLIC_URL="https://martinicell.cl")
 class WhatsAppCloudReceptionReceiptTests(APITestCase):
 
     def setUp(self):
@@ -166,7 +167,7 @@ class WhatsAppCloudReceptionReceiptTests(APITestCase):
 
         call_kwargs = mocked_send.call_args.kwargs
         tracking_url = (
-            "https://martini-cell-frontend.vercel.app/consulta?codigo="
+            "https://martinicell.cl/consulta?codigo="
             f"{self.order.tracking_code}"
         )
 
@@ -256,7 +257,7 @@ class WhatsAppCloudReceptionReceiptTests(APITestCase):
             response.data["message"],
         )
         self.assertIn(
-            "https://martini-cell-frontend.vercel.app/consulta?codigo=",
+            "https://martinicell.cl/consulta?codigo=",
             response.data["message"],
         )
 

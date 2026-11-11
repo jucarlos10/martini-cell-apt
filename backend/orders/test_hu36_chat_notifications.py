@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
+from django.test import override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -17,6 +18,7 @@ from .models import (
 )
 
 
+@override_settings(FRONTEND_PUBLIC_URL="https://martinicell.cl")
 class OrderChatNotificationTests(APITestCase):
 
     def setUp(self):
@@ -185,6 +187,14 @@ class OrderChatNotificationTests(APITestCase):
         )
 
         mocked_send.assert_called_once()
+        kwargs = mocked_send.call_args.kwargs
+        self.assertIn(
+            (
+                "https://martinicell.cl/consulta?codigo="
+                f"{self.order.tracking_code}"
+            ),
+            kwargs["html"],
+        )
 
     @patch(
         "orders.views.send_email",
@@ -281,6 +291,13 @@ class OrderChatNotificationTests(APITestCase):
         )
         self.assertIn(
             self.order.tracking_code,
+            notification.prepared_message,
+        )
+        self.assertIn(
+            (
+                "https://martinicell.cl/consulta?codigo="
+                f"{self.order.tracking_code}"
+            ),
             notification.prepared_message,
         )
         self.assertIn(
