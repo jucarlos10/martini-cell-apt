@@ -1,4 +1,4 @@
-﻿from django.db import transaction
+from django.db import transaction
 from django.db.models import Q
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.shortcuts import get_object_or_404
@@ -42,6 +42,7 @@ class ClientListCreateView(ListCreateAPIView):
             Q(name__icontains=search)
             | Q(phone__icontains=search)
             | Q(email__icontains=search)
+            | Q(document_number__icontains=search)
         )
 
         if normalized_rut:
@@ -75,7 +76,9 @@ class ClientDetailView(RetrieveUpdateDestroyAPIView):
         serializer.instance = client
 
         fields_to_track = (
+            "identification_type",
             "rut",
+            "document_number",
             "name",
             "phone",
             "email",
