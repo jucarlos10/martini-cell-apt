@@ -175,29 +175,22 @@ class WarrantyRequest(models.Model):
                 )
 
     def save(self, *args, **kwargs):
-        if self.order_id:
+        if self.order_id and self._state.adding:
             client = self.order.client
 
             if not self.client_name_snapshot:
                 self.client_name_snapshot = client.name
 
-            if not self.client_identification_type_snapshot:
-                self.client_identification_type_snapshot = (
-                    client.identification_type
-                )
-
-            if (
-                not self.client_identification_number_snapshot
-                and client.identification_value
-            ):
-                self.client_identification_number_snapshot = (
-                    client.identification_value
-                )
+            self.client_identification_type_snapshot = (
+                client.identification_type
+            )
+            self.client_identification_number_snapshot = (
+                client.identification_value
+            )
 
             # Compatibilidad con las solicitudes históricas y consumidores
             # que todavía leen el campo específico de RUT.
-            if not self.client_rut_snapshot and client.rut:
-                self.client_rut_snapshot = client.rut
+            self.client_rut_snapshot = client.rut or ""
 
         if self.created_by_id and not self.created_by_username:
             self.created_by_username = self.created_by.get_username()
