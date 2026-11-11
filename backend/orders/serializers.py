@@ -22,6 +22,7 @@ from .models import (
     OrderStatusNotification,
     OrderTechnicalReport,
     OrderTechnicalReportHistory,
+    OrderWarranty,
     ServiceOrder,
 )
 
@@ -49,6 +50,9 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
         read_only=True,
     )
 
+    chat_conversation_id = serializers.SerializerMethodField()
+    warranty_summary = serializers.SerializerMethodField()
+
     # HU-27: motivo del cambio sensible. No se guarda en ServiceOrder;
     # se conserva únicamente en el historial de auditoría.
     change_reason = serializers.CharField(
@@ -67,6 +71,8 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
             "client_name",
             "equipment",
             "equipment_description",
+            "chat_conversation_id",
+            "warranty_summary",
             "reported_issue",
             "initial_observations",
             "received_accessories",
@@ -86,6 +92,8 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
             "tracking_code",
             "client_name",
             "equipment_description",
+            "chat_conversation_id",
+            "warranty_summary",
             "preferred_notification_channel_display",
             "status",
             "status_display",
@@ -99,6 +107,56 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
             f"{obj.equipment.brand} "
             f"{obj.equipment.model}"
         )
+
+    def _technical_links_allowed(self):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+
+        return (
+            user is not None
+            and getattr(user, "is_authenticated", False)
+            and getattr(user, "role", None) in {"ADMIN", "TECH"}
+        )
+
+    def get_chat_conversation_id(self, obj):
+        if not self._technical_links_allowed():
+            return None
+
+        try:
+            return obj.chat_conversation.id
+        except OrderChatConversation.DoesNotExist:
+            return None
+
+    def get_warranty_summary(self, obj):
+        if not self._technical_links_allowed():
+            return None
+
+        warranties = list(obj.warranties.all())
+        count = len(warranties)
+
+        if count == 0:
+            return {
+                "count": 0,
+                "status": None,
+                "status_display": "No ingresada",
+            }
+
+        if count > 1:
+            return {
+                "count": count,
+                "status": "MULTIPLE",
+                "status_display": f"{count} garantías",
+            }
+
+        current_status = warranties[0].current_status
+
+        return {
+            "count": 1,
+            "status": current_status,
+            "status_display": (
+                OrderWarranty.WarrantyStatus(current_status).label
+            ),
+        }
 
     def _field_changes(self, instance, attrs):
         """
