@@ -44,6 +44,11 @@ def _comma_separated_env(name, default=""):
 
 ALLOWED_HOSTS = _comma_separated_env("DJANGO_ALLOWED_HOSTS")
 
+FRONTEND_PUBLIC_URL = os.getenv(
+    "FRONTEND_PUBLIC_URL",
+    "http://localhost:5173" if DEBUG else "https://martinicell.cl",
+).strip().rstrip("/")
+
 
 # Application definition
 
