@@ -1,5 +1,6 @@
 # Generated for flexible client identification.
 
+import customers.validators
 from django.db import migrations, models
 
 
@@ -49,7 +50,7 @@ class Migration(migrations.Migration):
                 max_length=9,
                 null=True,
                 unique=True,
-                validators=[],
+                validators=[customers.validators.validate_rut],
             ),
         ),
         migrations.AddConstraint(
