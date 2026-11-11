@@ -181,7 +181,13 @@ def get_order_status_data(order):
 class ServiceOrderListCreateView(ListCreateAPIView):
     queryset = (
         ServiceOrder.objects
-        .select_related("client", "equipment", "created_by")
+        .select_related(
+            "client",
+            "equipment",
+            "created_by",
+            "chat_conversation",
+        )
+        .prefetch_related("warranties")
         .all()
         .order_by("-received_at")
     )
@@ -200,7 +206,13 @@ class ServiceOrderListCreateView(ListCreateAPIView):
 class ServiceOrderDetailView(RetrieveUpdateAPIView):
     queryset = (
         ServiceOrder.objects
-        .select_related("client", "equipment", "created_by")
+        .select_related(
+            "client",
+            "equipment",
+            "created_by",
+            "chat_conversation",
+        )
+        .prefetch_related("warranties")
         .all()
     )
     serializer_class = ServiceOrderSerializer
