@@ -68,7 +68,7 @@ class Client(models.Model):
                 condition=(
                     ~models.Q(document_number="")
                     & ~models.Q(
-                        identification_type=IdentificationType.NONE
+                        identification_type="NONE"
                     )
                 ),
                 name="unique_client_document_by_type",
