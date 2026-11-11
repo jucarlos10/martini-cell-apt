@@ -68,7 +68,23 @@ class WarrantyRequest(models.Model):
     )
     concurrent_open_reason = models.TextField(blank=True)
     client_name_snapshot = models.CharField(max_length=150, editable=False)
-    client_rut_snapshot = models.CharField(max_length=20, editable=False)
+    client_rut_snapshot = models.CharField(
+        max_length=20,
+        blank=True,
+        editable=False,
+    )
+    client_identification_type_snapshot = models.CharField(
+        max_length=20,
+        blank=True,
+        default="",
+        editable=False,
+    )
+    client_identification_number_snapshot = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+        editable=False,
+    )
     evidence = models.ImageField(
         upload_to=warranty_request_evidence_upload_path,
         validators=[
@@ -161,12 +177,22 @@ class WarrantyRequest(models.Model):
                 )
 
     def save(self, *args, **kwargs):
-        if self.order_id:
-            if not self.client_name_snapshot:
-                self.client_name_snapshot = self.order.client.name
+        if self.order_id and self._state.adding:
+            client = self.order.client
 
-            if not self.client_rut_snapshot:
-                self.client_rut_snapshot = self.order.client.rut
+            if not self.client_name_snapshot:
+                self.client_name_snapshot = client.name
+
+            self.client_identification_type_snapshot = (
+                client.identification_type
+            )
+            self.client_identification_number_snapshot = (
+                client.identification_value
+            )
+
+            # Compatibilidad con las solicitudes históricas y consumidores
+            # que todavía leen el campo específico de RUT.
+            self.client_rut_snapshot = client.rut or ""
 
         if self.created_by_id and not self.created_by_username:
             self.created_by_username = self.created_by.get_username()
