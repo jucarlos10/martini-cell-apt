@@ -189,6 +189,7 @@ const filteredClients = computed(() => {
 
   return clients.value.filter((client) => {
     const normalText = [
+      client.client_code,
       client.name,
       client.phone,
       client.email,
@@ -1042,8 +1043,8 @@ onMounted(() => {
           <input
             v-model="search"
             class="form-control mb-3"
-            placeholder="Buscar cliente..."
-            aria-label="Buscar cliente"
+            placeholder="Buscar por código, nombre o identificación..."
+            aria-label="Buscar cliente por código, nombre o identificación"
           >
 
           <div
@@ -1077,6 +1078,10 @@ onMounted(() => {
             >
               <strong>{{ client.name }}</strong>
 
+              <div class="small fw-semibold">
+                {{ client.client_code }}
+              </div>
+
               <div class="small">
                 {{ clientIdentificationLabel(client) }}
               </div>
@@ -1107,6 +1112,10 @@ onMounted(() => {
           <div class="d-flex flex-wrap justify-content-between gap-2">
             <div>
               <h5>{{ selectedClient.name }}</h5>
+
+              <div class="fw-semibold">
+                {{ selectedClient.client_code }}
+              </div>
 
               <div class="text-muted">
                 {{ clientIdentificationLabel(selectedClient) }}
