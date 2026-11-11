@@ -59,6 +59,25 @@ function formatRut(value) {
   return `${formattedBody}-${verifier}`
 }
 
+function clientIdentificationLabel(client) {
+  if (!client) return 'Sin documento'
+
+  if (client.identification_type === 'RUT') {
+    const formatted = formatRut(client.rut)
+    return formatted ? `RUT chileno: ${formatted}` : 'RUT chileno: No registrado'
+  }
+
+  if (client.identification_type === 'PASSPORT') {
+    return `Pasaporte: ${client.document_number || 'No registrado'}`
+  }
+
+  if (client.identification_type === 'FOREIGN_DOCUMENT') {
+    return `Documento extranjero: ${client.document_number || 'No registrado'}`
+  }
+
+  return 'Sin documento'
+}
+
 function formatDateTime(value) {
   if (!value) return 'Sin información'
 
@@ -91,7 +110,7 @@ const selectedClient = computed(() =>
   ) || null
 )
 
-// Clientes que coinciden con el nombre o el RUT ingresado.
+// Clientes que coinciden con nombre, RUT, pasaporte o documento extranjero.
 const matchingClients = computed(() => {
   const term = clientSearch.value.trim().toLowerCase()
 
@@ -101,10 +120,24 @@ const matchingClients = computed(() => {
     ? normalizeRut(term)
     : ''
 
-  return clients.value.filter((client) =>
-    String(client.name || '').toLowerCase().includes(term) ||
-    (rutTerm !== '' && normalizeRut(client.rut).includes(rutTerm))
-  )
+  return clients.value.filter((client) => {
+    const normalText = [
+      client.name,
+      client.document_number,
+      client.identification_type_display,
+      clientIdentificationLabel(client),
+    ]
+      .join(' ')
+      .toLowerCase()
+
+    return (
+      normalText.includes(term) ||
+      (
+        rutTerm !== '' &&
+        normalizeRut(client.rut).includes(rutTerm)
+      )
+    )
+  })
 })
 
 // El cliente seleccionado permanece visible incluso si cambia la búsqueda.
@@ -1377,8 +1410,8 @@ onMounted(loadData)
               v-model="clientSearch"
               type="search"
               class="form-control mb-2"
-              placeholder="Buscar por RUT o nombre..."
-              aria-label="Buscar cliente por RUT o nombre"
+              placeholder="Buscar por nombre o identificación..."
+              aria-label="Buscar cliente por nombre o identificación"
               :disabled="saving"
             >
 
@@ -1398,7 +1431,7 @@ onMounted(loadData)
                 :value="client.id"
               >
                 {{ client.name }} ·
-                {{ formatRut(client.rut) }}
+                {{ clientIdentificationLabel(client) }}
               </option>
             </select>
 
@@ -1586,8 +1619,7 @@ onMounted(loadData)
               </strong>
 
               <div class="small text-muted">
-                RUT:
-                {{ formatRut(selectedClient?.rut) }}
+                {{ clientIdentificationLabel(selectedClient) }}
               </div>
 
               <div class="small text-muted">
