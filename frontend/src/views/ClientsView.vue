@@ -59,6 +59,13 @@ const equipmentTypes = [
   { value: 'OTRO', label: 'Otro' },
 ]
 
+const identificationTypes = [
+  { value: 'RUT', label: 'RUT chileno' },
+  { value: 'PASSPORT', label: 'Pasaporte' },
+  { value: 'FOREIGN_DOCUMENT', label: 'Documento extranjero' },
+  { value: 'NONE', label: 'Sin documento' },
+]
+
 const emptyEquipmentForm = () => ({
   equipment_type: 'CELULAR',
   brand: '',
@@ -81,7 +88,9 @@ let equipmentHistoryRequestId = 0
 let historyRequestId = 0
 
 const emptyForm = () => ({
+  identification_type: 'RUT',
   rut: '',
+  document_number: '',
   name: '',
   phone: '',
   email: '',
@@ -90,7 +99,9 @@ const emptyForm = () => ({
 const form = ref(emptyForm())
 
 const fieldLabels = {
+  identification_type: 'Tipo de identificación',
   rut: 'RUT',
+  document_number: 'Número de documento',
   name: 'Nombre',
   phone: 'Teléfono',
   email: 'Correo electrónico',
@@ -122,6 +133,33 @@ function formatRut(value) {
   return `${formattedBody}-${verifier}`
 }
 
+function identificationTypeLabel(value) {
+  return (
+    identificationTypes.find((item) => item.value === value)?.label ||
+    value ||
+    'Sin documento'
+  )
+}
+
+function clientIdentificationLabel(client) {
+  if (!client) return 'Sin documento'
+
+  if (client.identification_type === 'RUT') {
+    const formatted = formatRut(client.rut)
+    return formatted ? `RUT chileno: ${formatted}` : 'RUT chileno: No registrado'
+  }
+
+  if (client.identification_type === 'PASSPORT') {
+    return `Pasaporte: ${client.document_number || 'No registrado'}`
+  }
+
+  if (client.identification_type === 'FOREIGN_DOCUMENT') {
+    return `Documento extranjero: ${client.document_number || 'No registrado'}`
+  }
+
+  return 'Sin documento'
+}
+
 // Dar formato al RUT mientras se escribe.
 function onRutInput(event) {
   const clean = normalizeRut(event.target.value)
@@ -131,7 +169,13 @@ function onRutInput(event) {
   event.target.value = form.value.rut
 }
 
-// Buscar por nombre, RUT, teléfono o correo.
+function onIdentificationTypeChange() {
+  form.value.rut = ''
+  form.value.document_number = ''
+  formError.value = ''
+}
+
+// Buscar por nombre, identificación, teléfono o correo.
 const filteredClients = computed(() => {
   const term = search.value.trim().toLowerCase()
 
@@ -148,7 +192,9 @@ const filteredClients = computed(() => {
       client.name,
       client.phone,
       client.email,
-      formatRut(client.rut),
+      client.document_number,
+      client.identification_type_display,
+      clientIdentificationLabel(client),
     ]
       .join(' ')
       .toLowerCase()
@@ -202,6 +248,10 @@ function formatDate(value) {
 function formatChangeValue(field, value) {
   if (value === null || value === undefined || value === '') {
     return 'Sin dato'
+  }
+
+  if (field === 'identification_type') {
+    return identificationTypeLabel(value)
   }
 
   if (field === 'rut') {
@@ -520,7 +570,9 @@ function editClient(client) {
   editingId.value = client.id
 
   form.value = {
+    identification_type: client.identification_type || 'RUT',
     rut: formatRut(client.rut),
+    document_number: client.document_number || '',
     name: client.name || '',
     phone: client.phone || '',
     email: client.email || '',
@@ -554,16 +606,36 @@ async function saveClient() {
     return
   }
 
-  saving.value = true
   formError.value = ''
   success.value = ''
 
+  const phone = form.value.phone.trim()
+  const email = form.value.email.trim()
+
+  if (!phone && !email) {
+    formError.value =
+      'Ingresa al menos un teléfono o un correo electrónico para contactar al cliente.'
+    return
+  }
+
+  saving.value = true
+
   try {
     const payload = {
-      rut: normalizeRut(form.value.rut),
+      identification_type: form.value.identification_type,
+      rut:
+        form.value.identification_type === 'RUT'
+          ? normalizeRut(form.value.rut)
+          : '',
+      document_number:
+        ['PASSPORT', 'FOREIGN_DOCUMENT'].includes(
+          form.value.identification_type
+        )
+          ? form.value.document_number.trim()
+          : '',
       name: form.value.name.trim(),
-      phone: form.value.phone.trim(),
-      email: form.value.email.trim(),
+      phone,
+      email,
     }
 
     const url = isEditing
@@ -798,6 +870,31 @@ onMounted(() => {
         <div class="row g-3">
 
           <div class="col-md-6">
+            <label for="client-identification-type" class="form-label">
+              Tipo de identificación
+            </label>
+
+            <select
+              id="client-identification-type"
+              v-model="form.identification_type"
+              class="form-select"
+              :disabled="saving"
+              @change="onIdentificationTypeChange"
+            >
+              <option
+                v-for="type in identificationTypes"
+                :key="type.value"
+                :value="type.value"
+              >
+                {{ type.label }}
+              </option>
+            </select>
+          </div>
+
+          <div
+            v-if="form.identification_type === 'RUT'"
+            class="col-md-6"
+          >
             <label for="client-rut" class="form-label">
               RUT
             </label>
@@ -816,6 +913,46 @@ onMounted(() => {
 
             <div class="form-text">
               Ejemplo: 12.345.678-5
+            </div>
+          </div>
+
+          <div
+            v-else-if="
+              ['PASSPORT', 'FOREIGN_DOCUMENT'].includes(
+                form.identification_type
+              )
+            "
+            class="col-md-6"
+          >
+            <label for="client-document-number" class="form-label">
+              Número de documento
+            </label>
+
+            <input
+              id="client-document-number"
+              v-model="form.document_number"
+              class="form-control text-uppercase"
+              maxlength="50"
+              autocomplete="off"
+              required
+              :disabled="saving"
+            >
+
+            <div class="form-text">
+              {{
+                form.identification_type === 'PASSPORT'
+                  ? 'Ingresa el número de pasaporte.'
+                  : 'Ingresa el número del documento extranjero.'
+              }}
+            </div>
+          </div>
+
+          <div
+            v-else
+            class="col-md-6 d-flex align-items-end"
+          >
+            <div class="alert alert-light border mb-0 w-100 py-2">
+              El cliente se registrará sin documento de identificación.
             </div>
           </div>
 
@@ -842,9 +979,12 @@ onMounted(() => {
               id="client-phone"
               v-model="form.phone"
               class="form-control"
-              required
               :disabled="saving"
             >
+
+            <div class="form-text">
+              Teléfono o correo: al menos uno es obligatorio.
+            </div>
           </div>
 
           <div class="col-md-6">
@@ -938,11 +1078,11 @@ onMounted(() => {
               <strong>{{ client.name }}</strong>
 
               <div class="small">
-                RUT: {{ formatRut(client.rut) }}
+                {{ clientIdentificationLabel(client) }}
               </div>
 
               <div class="small">
-                {{ client.phone }}
+                {{ client.phone || client.email || 'Sin contacto registrado' }}
               </div>
             </button>
 
@@ -969,7 +1109,7 @@ onMounted(() => {
               <h5>{{ selectedClient.name }}</h5>
 
               <div class="text-muted">
-                RUT: {{ formatRut(selectedClient.rut) }}
+                {{ clientIdentificationLabel(selectedClient) }}
               </div>
             </div>
 
@@ -1003,7 +1143,7 @@ onMounted(() => {
 
           <div class="mt-3">
             <strong>Teléfono:</strong>
-            {{ selectedClient.phone }}
+            {{ selectedClient.phone || 'No registrado' }}
           </div>
 
           <div class="mt-2">
