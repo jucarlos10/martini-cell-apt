@@ -336,6 +336,8 @@ def _receipt_email_body(receipt):
 
     accessories = reception_data.get("received_accessories") or "Sin accesorios informados"
     observations = reception_data.get("initial_observations") or "Sin observaciones iniciales"
+    tracking_code = order_data.get("tracking_code", "")
+    tracking_url = _public_tracking_url(tracking_code)
 
     return (
         "MARTINI CELL - COMPROBANTE DE RECEPCIÓN\n\n"
@@ -356,6 +358,8 @@ def _receipt_email_body(receipt):
         f"{reception_data.get('confirmation', '')}\n\n"
         "Conserva el código de la orden para consultar posteriormente "
         "el estado de la reparación.\n"
+        "Consulta el estado de tu reparación en: "
+        f"{tracking_url}\n"
     )
 
 
@@ -865,7 +869,7 @@ def _public_tracking_url(tracking_code=""):
     elif settings.DEBUG:
         base_url = "http://localhost:5173"
     else:
-        base_url = "https://martini-cell-frontend.vercel.app"
+        base_url = "https://martinicell.cl"
 
     url = f"{base_url}/consulta"
     normalized_code = str(tracking_code or "").strip().upper()
