@@ -322,8 +322,8 @@ class WarrantyRequestReadSerializer(serializers.ModelSerializer):
     """
     Presenta la solicitud para perfiles internos autorizados.
 
-    El nombre y RUT corresponden a la copia histórica tomada
-    desde la orden al momento de crear la solicitud.
+    El nombre y la identificación corresponden a la copia histórica
+    tomada desde la orden al momento de crear la solicitud.
     """
 
     warranty_status = serializers.CharField(
@@ -355,6 +355,8 @@ class WarrantyRequestReadSerializer(serializers.ModelSerializer):
         source="client_rut_snapshot",
         read_only=True,
     )
+
+    client_identification = serializers.SerializerMethodField()
 
     status_display = serializers.CharField(
         source="get_status_display",
@@ -389,6 +391,7 @@ class WarrantyRequestReadSerializer(serializers.ModelSerializer):
             "concurrent_open_reason",
             "client_name",
             "client_rut",
+            "client_identification",
             "evidence",
             "evidence_download_url",
             "created_by",
@@ -400,6 +403,54 @@ class WarrantyRequestReadSerializer(serializers.ModelSerializer):
             "latest_proposal",
             "resolution",
         )
+
+    def get_client_identification(self, obj):
+        identification_type = (
+            obj.client_identification_type_snapshot or ""
+        )
+        number = (
+            obj.client_identification_number_snapshot
+            or obj.client_rut_snapshot
+            or ""
+        )
+
+        if identification_type == "RUT" or (
+            not identification_type and obj.client_rut_snapshot
+        ):
+            clean = str(number).strip().upper()
+
+            if len(clean) > 1:
+                body = clean[:-1]
+                verifier = clean[-1]
+
+                groups = []
+                while body:
+                    groups.insert(0, body[-3:])
+                    body = body[:-3]
+
+                clean = f"{'.'.join(groups)}-{verifier}"
+
+            return (
+                f"RUT chileno: {clean}"
+                if clean
+                else "RUT chileno: No registrado"
+            )
+
+        if identification_type == "PASSPORT":
+            return (
+                f"Pasaporte: {number}"
+                if number
+                else "Pasaporte: No registrado"
+            )
+
+        if identification_type == "FOREIGN_DOCUMENT":
+            return (
+                f"Documento extranjero: {number}"
+                if number
+                else "Documento extranjero: No registrado"
+            )
+
+        return "Sin documento"
 
     def get_coverage_warning(self, obj):
         if obj.has_expired_warranty:
