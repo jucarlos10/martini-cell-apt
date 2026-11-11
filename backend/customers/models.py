@@ -11,6 +11,14 @@ class Client(models.Model):
         FOREIGN_DOCUMENT = "FOREIGN_DOCUMENT", "Documento extranjero"
         NONE = "NONE", "Sin documento"
 
+    client_code = models.CharField(
+        max_length=20,
+        unique=True,
+        null=True,
+        blank=True,
+        editable=False,
+    )
+
     identification_type = models.CharField(
         max_length=20,
         choices=IdentificationType.choices,
@@ -119,6 +127,19 @@ class Client(models.Model):
         super().clean_fields(exclude=exclude)
 
     def save(self, *args, **kwargs):
+        is_new = self._state.adding
+
+        # El código interno es inmutable una vez asignado.
+        if not is_new and self.pk:
+            stored_code = (
+                type(self).objects
+                .filter(pk=self.pk)
+                .values_list("client_code", flat=True)
+                .first()
+            )
+            if stored_code:
+                self.client_code = stored_code
+
         if self.identification_type == self.IdentificationType.RUT:
             self.rut = normalize_rut(self.rut)
             self.document_number = ""
@@ -138,8 +159,18 @@ class Client(models.Model):
 
         super().save(*args, **kwargs)
 
+        if not self.client_code:
+            self.client_code = f"CLI-{self.pk:06d}"
+            type(self).objects.filter(
+                pk=self.pk,
+                client_code__isnull=True,
+            ).update(client_code=self.client_code)
+
     def __str__(self):
-        return f"{self.name} - {self.identification_display}"
+        return (
+            f"{self.client_code or 'CLI-SIN-CODIGO'} - "
+            f"{self.name} - {self.identification_display}"
+        )
 
 
 class ClientChangeHistory(models.Model):

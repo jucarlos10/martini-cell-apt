@@ -4261,7 +4261,7 @@ watch(
                       :key="client.id"
                       :value="client.id"
                     >
-                      {{ client.name }} · {{ clientIdentificationLabel(client) }}
+                      {{ client.client_code }} · {{ client.name }} · {{ clientIdentificationLabel(client) }}
                     </option>
                   </select>
                 </div>

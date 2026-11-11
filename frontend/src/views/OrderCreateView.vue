@@ -122,6 +122,7 @@ const matchingClients = computed(() => {
 
   return clients.value.filter((client) => {
     const normalText = [
+      client.client_code,
       client.name,
       client.document_number,
       client.identification_type_display,
@@ -1410,8 +1411,8 @@ onMounted(loadData)
               v-model="clientSearch"
               type="search"
               class="form-control mb-2"
-              placeholder="Buscar por nombre o identificación..."
-              aria-label="Buscar cliente por nombre o identificación"
+              placeholder="Buscar por código, nombre o identificación..."
+              aria-label="Buscar cliente por código, nombre o identificación"
               :disabled="saving"
             >
 
@@ -1430,6 +1431,7 @@ onMounted(loadData)
                 :key="client.id"
                 :value="client.id"
               >
+                {{ client.client_code }} ·
                 {{ client.name }} ·
                 {{ clientIdentificationLabel(client) }}
               </option>
@@ -1617,6 +1619,11 @@ onMounted(loadData)
               <strong>
                 {{ selectedClient?.name }}
               </strong>
+
+              <div class="small fw-semibold">
+                Código cliente:
+                {{ selectedClient?.client_code }}
+              </div>
 
               <div class="small text-muted">
                 {{ clientIdentificationLabel(selectedClient) }}
