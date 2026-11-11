@@ -76,11 +76,13 @@ class WarrantyRequest(models.Model):
     client_identification_type_snapshot = models.CharField(
         max_length=20,
         blank=True,
+        default="",
         editable=False,
     )
     client_identification_number_snapshot = models.CharField(
         max_length=50,
         blank=True,
+        default="",
         editable=False,
     )
     evidence = models.ImageField(
