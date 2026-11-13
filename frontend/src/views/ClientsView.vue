@@ -1,9 +1,18 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 import AdminLayout from '../layouts/AdminLayout.vue'
 import PageHeader from '../components/PageHeader.vue'
 import { authenticatedFetch, getCurrentUser } from '../services/auth'
+import {
+  clearRegistrationDraft,
+  loadRegistrationDraft,
+  saveRegistrationDraft,
+} from '../services/registrationDraft'
+
+const draftOwnerId = getCurrentUser()?.id
+const clientDraftRestored = ref(false)
+const equipmentDraftRestored = ref(false)
 
 const clients = ref([])
 const selectedId = ref(null)
@@ -97,6 +106,21 @@ const emptyForm = () => ({
 })
 
 const form = ref(emptyForm())
+
+watch(form, () => {
+  if (showForm.value && editingId.value === null) {
+    saveRegistrationDraft(draftOwnerId, 'client', { form: form.value })
+  }
+}, { deep: true })
+
+watch(equipmentForm, () => {
+  if (showEquipmentForm.value && selectedId.value !== null) {
+    saveRegistrationDraft(draftOwnerId, 'equipment', {
+      clientId: selectedId.value,
+      form: equipmentForm.value,
+    })
+  }
+}, { deep: true })
 
 const fieldLabels = {
   identification_type: 'Tipo de identificación',
@@ -464,7 +488,14 @@ function openEquipmentForm() {
   if (!selectedClient.value || !selectedClient.value.is_active) return
   if (isBusy.value) return
 
-  equipmentForm.value = emptyEquipmentForm()
+  const draft = loadRegistrationDraft(draftOwnerId, 'equipment')
+  equipmentForm.value = draft?.clientId === selectedId.value
+    ? { ...emptyEquipmentForm(), ...draft.form }
+    : emptyEquipmentForm()
+  if (draft && draft.clientId !== selectedId.value) {
+    clearRegistrationDraft(draftOwnerId, 'equipment')
+  }
+  equipmentDraftRestored.value = Boolean(draft?.clientId === selectedId.value)
   equipmentFormError.value = ''
   success.value = ''
   showEquipmentForm.value = true
@@ -474,6 +505,8 @@ function cancelEquipmentForm() {
   if (savingEquipment.value) return
 
   showEquipmentForm.value = false
+  clearRegistrationDraft(draftOwnerId, 'equipment')
+  equipmentDraftRestored.value = false
   equipmentFormError.value = ''
   equipmentForm.value = emptyEquipmentForm()
 }
@@ -526,6 +559,8 @@ async function createEquipment() {
     ]
 
     showEquipmentForm.value = false
+    clearRegistrationDraft(draftOwnerId, 'equipment')
+    equipmentDraftRestored.value = false
     equipmentForm.value = emptyEquipmentForm()
     success.value = `Equipo #${created.id} registrado correctamente.`
 
@@ -552,7 +587,9 @@ function openForm() {
   if (isBusy.value) return
 
   editingId.value = null
-  form.value = emptyForm()
+  const draft = loadRegistrationDraft(draftOwnerId, 'client')
+  form.value = draft ? { ...emptyForm(), ...draft.form } : emptyForm()
+  clientDraftRestored.value = Boolean(draft)
 
   formError.value = ''
   success.value = ''
@@ -569,6 +606,7 @@ function editClient(client) {
   ) return
 
   editingId.value = client.id
+  clientDraftRestored.value = false
 
   form.value = {
     identification_type: client.identification_type || 'RUT',
@@ -589,6 +627,8 @@ function cancelForm() {
   if (saving.value) return
 
   showForm.value = false
+  if (editingId.value === null) clearRegistrationDraft(draftOwnerId, 'client')
+  clientDraftRestored.value = false
   editingId.value = null
 
   form.value = emptyForm()
@@ -661,6 +701,8 @@ async function saveClient() {
     const savedClient = await response.json()
 
     showForm.value = false
+    if (!isEditing) clearRegistrationDraft(draftOwnerId, 'client')
+    clientDraftRestored.value = false
     editingId.value = null
     form.value = emptyForm()
 
@@ -787,9 +829,26 @@ async function deleteEquipment(item) {
   }
 }
 
-onMounted(() => {
-  loadClients()
-  loadEquipment()
+onMounted(async () => {
+  const clientDraft = loadRegistrationDraft(draftOwnerId, 'client')
+  if (clientDraft) {
+    editingId.value = null
+    form.value = { ...emptyForm(), ...clientDraft.form }
+    showForm.value = true
+    clientDraftRestored.value = true
+  }
+
+  await Promise.all([loadClients(), loadEquipment()])
+
+  const equipmentDraft = loadRegistrationDraft(draftOwnerId, 'equipment')
+  const client = clients.value.find((item) => item.id === equipmentDraft?.clientId)
+  if (client?.is_active) {
+    selectedId.value = client.id
+    await nextTick()
+    equipmentForm.value = { ...emptyEquipmentForm(), ...equipmentDraft.form }
+    showEquipmentForm.value = true
+    equipmentDraftRestored.value = true
+  }
 })
 </script>
 
@@ -858,6 +917,13 @@ onMounted(() => {
             : 'Registrar nuevo cliente'
         }}
       </h5>
+
+      <div v-if="clientDraftRestored" class="alert alert-info" role="status">
+        Recuperamos los datos del cliente que estabas registrando. Revísalos antes de guardar.
+        <button type="button" class="btn btn-sm btn-outline-secondary ms-2" @click="cancelForm">
+          Descartar borrador
+        </button>
+      </div>
 
       <div
         v-if="formError"
@@ -1215,6 +1281,13 @@ onMounted(() => {
 
           <div v-if="showEquipmentForm" class="border rounded p-3 mb-3">
             <h6 class="mb-3">Registrar equipo para {{ selectedClient.name }}</h6>
+
+            <div v-if="equipmentDraftRestored" class="alert alert-info" role="status">
+              Recuperamos los datos de este equipo. Revísalos antes de guardar.
+              <button type="button" class="btn btn-sm btn-outline-secondary ms-2" @click="cancelEquipmentForm">
+                Descartar borrador
+              </button>
+            </div>
 
             <div
               v-if="equipmentFormError"

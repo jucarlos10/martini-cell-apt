@@ -46,6 +46,7 @@ const receptionReceiptDeliveryMethod = ref('')
 const receptionReceiptDeliverySaving = ref(false)
 const receptionReceiptDeliveryError = ref('')
 const receptionReceiptDeliverySuccess = ref('')
+const receptionReceiptWhatsappUrl = ref('')
 let receptionReceiptRequestId = 0
 
 const receptionReceiptSnapshot = computed(() =>
@@ -2951,6 +2952,7 @@ function resetReceptionReceipt() {
   receptionReceiptDeliverySaving.value = false
   receptionReceiptDeliveryError.value = ''
   receptionReceiptDeliverySuccess.value = ''
+  receptionReceiptWhatsappUrl.value = ''
 }
 
 function receptionReceiptApiError(data, fallback) {
@@ -2979,6 +2981,7 @@ async function loadReceptionReceipt() {
   receptionReceiptError.value = ''
   receptionReceiptDeliveryError.value = ''
   receptionReceiptDeliverySuccess.value = ''
+  receptionReceiptWhatsappUrl.value = ''
 
   try {
     const response = await authenticatedFetch(
@@ -3170,8 +3173,15 @@ async function deliverReceptionReceipt(method) {
   receptionReceiptDeliverySaving.value = true
   receptionReceiptDeliveryError.value = ''
   receptionReceiptDeliverySuccess.value = ''
+  receptionReceiptWhatsappUrl.value = ''
+
+  const printWindow = method === 'PRINT' ? window.open('', '_blank') : null
 
   try {
+    if (method === 'PRINT' && !printWindow) {
+      throw new Error('El navegador bloqueó la impresión. Permite ventanas emergentes y vuelve a intentarlo.')
+    }
+
     if (method === 'PRINT') {
       await ensureReceptionReceiptPrintChannel()
     }
@@ -3211,23 +3221,19 @@ async function deliverReceptionReceipt(method) {
       }
     }
 
-    receptionReceiptDeliverySuccess.value =
-      data?.detail || 'Comprobante procesado correctamente.'
-
-    if (method === 'WHATSAPP' && data?.whatsapp_url) {
-      window.open(
-        data.whatsapp_url,
-        '_blank',
-        'noopener,noreferrer'
-      )
-    }
-
     await loadReceptionReceipt()
 
+    receptionReceiptDeliverySuccess.value =
+      data?.detail || 'Comprobante procesado correctamente.'
+    if (method === 'WHATSAPP') {
+      receptionReceiptWhatsappUrl.value = data?.whatsapp_url || ''
+    }
+
     if (method === 'PRINT') {
-      printReceptionReceipt()
+      printReceptionReceipt(printWindow)
     }
   } catch (err) {
+    printWindow?.close()
     receptionReceiptDeliveryError.value =
       err?.message || 'Error al procesar el comprobante.'
   } finally {
@@ -3244,7 +3250,7 @@ function escapeReceptionReceiptHtml(value) {
     .replaceAll("'", '&#039;')
 }
 
-function printReceptionReceipt() {
+function printReceptionReceipt(preopenedWindow = null) {
   if (!receptionReceiptSnapshot.value) return
 
   const snapshot = receptionReceiptSnapshot.value
@@ -3254,7 +3260,9 @@ function printReceptionReceipt() {
   const receptionData = snapshot.reception || {}
   const trackingData = snapshot.tracking || {}
 
-  const printWindow = window.open('', '_blank')
+  const printWindow = preopenedWindow?.document
+    ? preopenedWindow
+    : window.open('', '_blank')
 
   if (!printWindow) {
     receptionReceiptDeliveryError.value =
@@ -3276,6 +3284,7 @@ function printReceptionReceipt() {
     `
     : ''
 
+  printWindow.document.open()
   printWindow.document.write(`
     <!doctype html>
     <html lang="es">
@@ -4795,6 +4804,16 @@ watch(
                   >
                     {{ receptionReceiptDeliveryError }}
                   </div>
+
+                  <a
+                    v-if="receptionReceiptWhatsappUrl"
+                    :href="receptionReceiptWhatsappUrl"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="btn btn-success w-100 mb-3"
+                  >
+                    Abrir WhatsApp y confirmar el envío
+                  </a>
 
                   <label
                     for="receipt-delivery-method"

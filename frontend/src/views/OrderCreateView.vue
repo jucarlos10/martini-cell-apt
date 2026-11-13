@@ -3,9 +3,14 @@ import { computed, onMounted, ref, watch } from 'vue'
 
 import AdminLayout from '../layouts/AdminLayout.vue'
 import PageHeader from '../components/PageHeader.vue'
-import { authenticatedFetch } from '../services/auth'
+import { authenticatedFetch, getCurrentUser } from '../services/auth'
+import { clearOrderDraft, loadOrderDraft, saveOrderDraft } from '../services/orderDraft'
 
-const step = ref(1)
+const draftOwnerId = getCurrentUser()?.id
+const restoredDraft = loadOrderDraft(draftOwnerId)
+const draftRestored = ref(Boolean(restoredDraft))
+
+const step = ref(restoredDraft?.step || 1)
 const loading = ref(true)
 const saving = ref(false)
 
@@ -15,11 +20,11 @@ const createdOrder = ref(null)
 const clients = ref([])
 const devices = ref([])
 
-const clientId = ref('')
-const equipmentId = ref('')
+const clientId = ref(restoredDraft?.clientId || '')
+const equipmentId = ref(restoredDraft?.equipmentId || '')
 const clientSearch = ref('')
 
-const order = ref({
+const order = ref(restoredDraft?.order || {
   reported_issue: '',
   initial_observations: '',
   received_accessories: '',
@@ -34,6 +39,7 @@ const deliveryMethod = ref('')
 const deliveringReceipt = ref(false)
 const deliverySuccess = ref('')
 const deliveryError = ref('')
+const whatsappDeliveryUrl = ref('')
 
 // Normalizar el RUT para buscar con o sin puntos y guion.
 function normalizeRut(value) {
@@ -227,6 +233,16 @@ watch(clientId, () => {
   equipmentId.value = ''
 })
 
+watch([step, clientId, equipmentId, order], () => {
+  if (createdOrder.value) return
+  saveOrderDraft(draftOwnerId, {
+    step: step.value,
+    clientId: clientId.value,
+    equipmentId: equipmentId.value,
+    order: order.value,
+  })
+}, { deep: true })
+
 // Mostrar errores enviados por Django.
 function formatApiErrors(data) {
   if (typeof data?.detail === 'string') {
@@ -285,6 +301,10 @@ async function loadData() {
     devices.value = Array.isArray(devicesData)
       ? devicesData
       : devicesData.results || []
+
+    if (restoredDraft && (!selectedClient.value || !selectedEquipment.value)) {
+      step.value = 1
+    }
 
   } catch (err) {
     error.value =
@@ -457,9 +477,18 @@ async function deliverReceipt(method) {
 
   deliverySuccess.value = ''
   deliveryError.value = ''
+  whatsappDeliveryUrl.value = ''
   deliveringReceipt.value = true
 
+  // Abrir la pestaña al pulsar el botón: después de esperar a la API el
+  // navegador puede bloquearla y dejar una impresión registrada sin mostrarla.
+  const printWindow = method === 'PRINT' ? window.open('', '_blank') : null
+
   try {
+    if (method === 'PRINT' && !printWindow) {
+      throw new Error('El navegador bloqueó la impresión. Permite ventanas emergentes y vuelve a intentarlo.')
+    }
+
     if (method === 'PRINT') {
       await ensurePrintNotificationChannel()
     }
@@ -494,21 +523,16 @@ async function deliverReceipt(method) {
     deliverySuccess.value =
       data?.detail || 'Comprobante procesado correctamente.'
 
-    if (method === 'WHATSAPP' && data?.whatsapp_url) {
-      window.open(
-        data.whatsapp_url,
-        '_blank',
-        'noopener,noreferrer'
-      )
-    }
+    if (method === 'WHATSAPP') whatsappDeliveryUrl.value = data?.whatsapp_url || ''
 
     await refreshReceipt()
 
     if (method === 'PRINT') {
-      printReceipt()
+      printReceipt(printWindow)
     }
 
   } catch (err) {
+    printWindow?.close()
     deliveryError.value =
       err.message || 'No fue posible procesar el comprobante.'
 
@@ -527,7 +551,7 @@ function escapeHtml(value) {
 }
 
 // Crear una versión limpia para imprimir o guardar como PDF desde el navegador.
-function printReceipt() {
+function printReceipt(preopenedWindow = null) {
   if (!receiptSnapshot.value) return
 
   const snapshot = receiptSnapshot.value
@@ -537,7 +561,9 @@ function printReceipt() {
   const receptionData = snapshot.reception || {}
   const trackingData = snapshot.tracking || {}
 
-  const printWindow = window.open('', '_blank')
+  const printWindow = preopenedWindow?.document
+    ? preopenedWindow
+    : window.open('', '_blank')
 
   if (!printWindow) {
     deliveryError.value =
@@ -556,6 +582,7 @@ function printReceipt() {
     `
     : ''
 
+  printWindow.document.open()
   printWindow.document.write(`
     <!doctype html>
     <html lang="es">
@@ -785,6 +812,8 @@ async function save() {
 
     // Django devuelve el ID y el mismo código utilizado para seguimiento.
     createdOrder.value = await response.json()
+    clearOrderDraft(draftOwnerId)
+    draftRestored.value = false
     chooseDefaultDeliveryMethod()
 
     // Generar inmediatamente la vista previa de recepción.
@@ -800,6 +829,8 @@ async function save() {
 }
 
 function restart() {
+  clearOrderDraft(draftOwnerId)
+  draftRestored.value = false
   createdOrder.value = null
   receipt.value = null
 
@@ -821,6 +852,7 @@ function restart() {
   deliveringReceipt.value = false
   deliverySuccess.value = ''
   deliveryError.value = ''
+  whatsappDeliveryUrl.value = ''
 
   error.value = ''
 }
@@ -882,6 +914,22 @@ onMounted(loadData)
             <div class="text-muted">
               La orden y el seguimiento utilizan el mismo código.
             </div>
+
+            <div class="d-flex flex-wrap gap-2 mt-3">
+              <router-link
+                :to="`/ordenes/${createdOrder.id}`"
+                class="btn btn-primary"
+              >
+                Administrar esta orden
+              </router-link>
+              <router-link to="/ordenes" class="btn btn-outline-secondary">
+                Ver todas las órdenes
+              </router-link>
+            </div>
+
+            <p class="small text-muted mt-2 mb-0">
+              Después puedes volver desde Órdenes y buscar este código o el nombre del cliente.
+            </p>
           </div>
 
           <div class="text-md-end">
@@ -1132,6 +1180,16 @@ onMounted(loadData)
             {{ deliveryError }}
           </div>
 
+          <a
+            v-if="whatsappDeliveryUrl"
+            :href="whatsappDeliveryUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="btn btn-success mb-3"
+          >
+            Abrir WhatsApp y confirmar el envío
+          </a>
+
           <div class="row g-3 mb-3">
             <div class="col-md-4">
               <label class="border rounded p-3 d-block h-100">
@@ -1188,8 +1246,8 @@ onMounted(loadData)
                 </div>
 
                 <div class="small text-muted mt-1">
-                  Primera versión: se abrirá WhatsApp con
-                  el mensaje preparado para envío manual.
+                  Si el envío automático no está configurado, aparecerá
+                  un enlace para revisar y enviar el mensaje manualmente.
                 </div>
               </label>
             </div>
@@ -1354,6 +1412,11 @@ onMounted(loadData)
 
     <!-- Formulario de tres pasos -->
     <div v-else class="mc-card p-4">
+
+      <div v-if="draftRestored" class="alert alert-info d-flex flex-wrap align-items-center justify-content-between gap-2" role="status">
+        <span>Se recuperó tu recepción sin guardar. Revisa cliente, equipo y datos antes de crear la orden.</span>
+        <button type="button" class="btn btn-sm btn-outline-secondary" @click="restart">Descartar borrador</button>
+      </div>
 
       <div class="d-flex flex-wrap gap-3 mb-4">
         <div
