@@ -914,6 +914,22 @@ onMounted(loadData)
             <div class="text-muted">
               La orden y el seguimiento utilizan el mismo código.
             </div>
+
+            <div class="d-flex flex-wrap gap-2 mt-3">
+              <router-link
+                :to="`/ordenes/${createdOrder.id}`"
+                class="btn btn-primary"
+              >
+                Administrar esta orden
+              </router-link>
+              <router-link to="/ordenes" class="btn btn-outline-secondary">
+                Ver todas las órdenes
+              </router-link>
+            </div>
+
+            <p class="small text-muted mt-2 mb-0">
+              Después puedes volver desde Órdenes y buscar este código o el nombre del cliente.
+            </p>
           </div>
 
           <div class="text-md-end">

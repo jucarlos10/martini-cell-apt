@@ -216,7 +216,7 @@ onMounted(loadOrders)
       Órdenes de servicio
 
       <template #subtitle>
-        Gestión y consulta de órdenes registradas.
+        Las órdenes más recientes aparecen primero. Abre el código para administrarlas.
       </template>
 
       <template #actions>
@@ -445,6 +445,14 @@ onMounted(loadOrders)
                 <div class="small text-muted">
                   Orden #{{ order.id }}
                 </div>
+
+                <router-link
+                  :to="`/ordenes/${order.id}`"
+                  class="btn btn-sm btn-outline-primary mt-1"
+                  :aria-label="`Administrar orden ${order.tracking_code}`"
+                >
+                  Administrar
+                </router-link>
               </td>
 
               <td>
