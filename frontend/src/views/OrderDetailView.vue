@@ -34,6 +34,7 @@ const canViewSensitiveHistory = ['ADMIN', 'TECH'].includes(currentUser?.role)
 
 const order = ref(null)
 const history = ref([])
+const latestStatusEvent = computed(() => history.value.at(-1) || null)
 const technicalReport = ref(null)
 const times = ref(null)
 
@@ -4207,6 +4208,51 @@ watch(
 
       <!-- RESUMEN: información real de la orden y sus tiempos -->
       <section v-if="tab === 'resumen'" class="row g-3">
+        <div class="col-12">
+          <div class="mc-card p-4">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+              <div>
+                <h5 class="mb-1">Trazabilidad de esta orden</h5>
+                <div class="small text-muted">
+                  Los cambios de estado conservan fecha, responsable y observación.
+                  La vista del cliente muestra solo estados y fechas.
+                </div>
+              </div>
+              <StatusBadge
+                :status="order.status"
+                :label="order.status_display || order.status"
+              />
+            </div>
+
+            <div v-if="historyError" class="alert alert-warning small mt-3 mb-0" role="alert">
+              {{ historyError }}
+            </div>
+            <div v-else-if="latestStatusEvent" class="small mt-3">
+              Último movimiento:
+              <strong>{{ latestStatusEvent.to_status_display || latestStatusEvent.to_status }}</strong>
+              · {{ formatDate(latestStatusEvent.changed_at) }}
+              · {{ latestStatusEvent.changed_by_username || 'Usuario no disponible' }}
+            </div>
+            <div v-else class="small text-muted mt-3">
+              Aún no hay movimientos para mostrar.
+            </div>
+
+            <div class="d-flex flex-wrap gap-2 mt-3">
+              <button type="button" class="btn btn-primary" @click="selectTab('linea')">
+                Ver línea de tiempo
+              </button>
+              <router-link
+                :to="{ path: '/consulta', query: { codigo: order.tracking_code } }"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn btn-outline-primary"
+              >
+                Ver seguimiento como cliente
+              </router-link>
+            </div>
+          </div>
+        </div>
+
         <div class="col-lg-8">
           <div class="mc-card p-4 h-100">
             <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">

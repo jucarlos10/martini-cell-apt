@@ -925,6 +925,14 @@ onMounted(loadData)
               <router-link to="/ordenes" class="btn btn-outline-secondary">
                 Ver todas las órdenes
               </router-link>
+              <router-link
+                :to="{ path: '/consulta', query: { codigo: createdOrder.tracking_code } }"
+                class="btn btn-outline-primary"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Ver seguimiento como cliente
+              </router-link>
             </div>
 
             <p class="small text-muted mt-2 mb-0">
