@@ -1,12 +1,68 @@
 # Conectar Martini Cell al host: pasos para Oscar
 
-Estado: el código está preparado para probar un despliegue, pero el repositorio
-no contiene un proveedor, servidor, dominio ni credenciales. Este ejemplo usa
-**un mismo dominio HTTPS** para Vue y Django. Si el host es un servicio
-administrado, conservar el esquema de rutas y adaptar los comandos al panel del
-proveedor.
+Estado 07-10-2026: Oscar integró el [PR #87](https://github.com/jucarlos10/martini-cell-apt/pull/87).
+El frontend está publicado en
+[Vercel](https://martini-cell-frontend.vercel.app/) y `/api/` se reescribe hacia
+el backend Django en Railway. El PR registra una respuesta correcta de
+`/api/health/` y un inicio de sesión desde el frontend publicado. Estas son
+las pruebas documentadas por Oscar; el repositorio no muestra la configuración
+privada de Railway, el volumen de fotografías ni los respaldos.
 
-## Qué hay en el proyecto
+## Despliegue actual: Vercel y Railway
+
+| Componente | Destino | Comprobación |
+| --- | --- | --- |
+| Vue | `frontend/` en Vercel | El dominio público carga la interfaz según el PR #87. |
+| API Django | Railway | `frontend/vercel.json` reescribe `/api/*` al dominio Railway sin cambiar la URL del navegador. |
+| PostgreSQL | Railway | Confirmar migraciones y respaldo/restauración desde el panel. |
+| Fotos privadas | Volumen del servicio Django | Confirmar montaje y que `DJANGO_PRIVATE_MEDIA_ROOT` apunte dentro del volumen. |
+
+El frontend mantiene rutas relativas `/api/`, por lo que la reescritura de
+Vercel conserva el mismo origen visible para el navegador. El fallback a
+`index.html` permite recargar rutas de Vue como `/panel`. El proxy de Vite
+`API_PROXY_TARGET` solo se usa en desarrollo local.
+
+### Verificaciones pendientes para Oscar
+
+1. En el servicio Django de Railway, adjuntar y comprobar un volumen
+   persistente para las fotos. Railway proporciona
+   `RAILWAY_VOLUME_MOUNT_PATH` cuando existe un volumen; fijar
+   `DJANGO_PRIVATE_MEDIA_ROOT` a esa ruta o a una subcarpeta. Ejecutar
+   `python deploy/check_host.py` **en el contenedor en ejecución**, con las
+   variables y usuario del servicio. El comprobador avisa si falta el volumen
+   o si las fotos quedan fuera de él. No ejecutarlo como prueba del volumen en
+   el paso previo al despliegue: Railway lo monta recién al iniciar el servicio.
+2. Confirmar en Railway `DJANGO_DEBUG=false`, clave secreta y base de datos en
+   variables privadas, migraciones aplicadas, estáticos del admin y el proceso
+   Gunicorn. Configurar el healthcheck del servicio como `/api/health/`.
+3. Verificar una orden de ensayo y una foto sin datos personales: cargarla,
+   descargarla con sesión, confirmar que no se expone públicamente y repetir
+   la consulta después de un nuevo despliegue. Probar respaldo y restauración
+   de PostgreSQL y del volumen de fotos.
+4. Repetir desde fuera del host estas consultas sin credenciales:
+
+   ```bash
+   curl -i https://martini-cell-frontend.vercel.app/api/health/
+   curl -i https://martini-cell-frontend.vercel.app/api/auth/me/
+   ```
+
+   La primera debe devolver `200` y `{"status":"ok"}`. La segunda debe
+   rechazar el acceso sin sesión (`401`), no devolver `index.html`. Revisar
+   también `/login` y `/panel` después de recargar. La prueba de inicio de
+   sesión se hace desde la interfaz y sin publicar credenciales.
+
+La ruta `/admin/` no está incluida en la reescritura de Vercel; si se usa el
+admin, probarlo en el dominio de Railway con sus archivos `/static/` y acceso
+restringido. El dataset privado sigue un flujo separado en la
+[guía de integración](integracion-dataset-para-oscar.md).
+
+## Alternativa para un VPS con Nginx
+
+Los pasos siguientes documentan una alternativa si se cambia de proveedor.
+No son los comandos de instalación ya ejecutados en Vercel/Railway. Este
+ejemplo usa un mismo dominio HTTPS para Vue y Django mediante Nginx.
+
+### Componentes y rutas del VPS
 
 | Componente | Ubicación | En el host |
 | --- | --- | --- |
@@ -23,7 +79,7 @@ El host debe enviar `/api/` y `/admin/` a Django, servir `/static/` desde
 [`nginx.martini-cell.example.conf`](../deploy/nginx.martini-cell.example.conf)
 muestra una configuración para VPS; contiene nombres y rutas de ejemplo.
 
-## Datos que Oscar debe obtener del host
+### Datos necesarios para esta alternativa
 
 | Dato | Para qué se usa |
 | --- | --- |
@@ -37,7 +93,7 @@ No escribir credenciales ni datos de clientes en GitHub. El archivo local
 `backend/.env` se ignora por Git. El directorio `private_data/` del dataset
 también se ignora; **no se copia al host** solo por publicar la aplicación.
 
-## Secuencia de puesta en marcha
+### Secuencia de puesta en marcha
 
 1. En el host, obtener el código desde `main`. Preparar Python 3.12, Node 20 y
    PostgreSQL. Configurar el entorno de Django con una clave secreta nueva,
@@ -106,7 +162,7 @@ también se ignora; **no se copia al host** solo por publicar la aplicación.
    `systemctl status martini-cell` y `journalctl -u martini-cell`. El ejemplo
    de Nginx usa el mismo puerto local `127.0.0.1:8000`.
 
-## Pruebas de conexión
+### Pruebas de conexión del VPS
 
 Desde el host, comprobar Gunicorn con el dominio real en `Host` y el encabezado
 HTTPS que inyectará el proxy (sustituir el dominio de ejemplo):
@@ -140,6 +196,9 @@ La carga de órdenes históricas y del dataset tiene otro flujo; la
 la validación privada de casos para HU-17. Publicar el sitio no convierte
 candidatos comerciales o de chat en órdenes reales.
 
-Referencias: [lista de despliegue de Django](https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/),
+Referencias: [volúmenes de Railway](https://docs.railway.com/volumes),
+[variables de Railway](https://docs.railway.com/variables/reference),
+[reescrituras de Vercel](https://vercel.com/docs/routing/rewrites),
+[lista de despliegue de Django](https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/),
 [ejecución de Gunicorn](https://gunicorn.org/run/) y
 [TLS de PostgreSQL](https://www.postgresql.org/docs/current/libpq-ssl.html).
