@@ -133,3 +133,152 @@ test('una verificación anterior no sustituye un nuevo inicio de sesión', async
   assert.deepEqual(getCurrentUser(), { id: 2, role: 'TECH' })
   assert.equal(sessionStorage.getItem(USER_KEY), JSON.stringify({ id: 2, role: 'TECH' }))
 })
+
+for (const method of ['WHATSAPP', 'EMAIL', 'PRINT']) {
+  test(`renueva la sesión si vence al entregar el comprobante por ${method}`, async () => {
+    sessionStorage.setItem(ACCESS_KEY, 'vigente-al-verificar')
+    sessionStorage.setItem(REFRESH_KEY, 'renovable')
+    const deliveries = []
+    globalThis.fetch = async (url, options) => {
+      if (url === '/api/auth/me/') return response(200, { id: 1, role: 'ADMIN' })
+      if (url === '/api/auth/refresh/') return response(200, { access: 'renovado' })
+      deliveries.push({
+        authorization: options.headers.get('Authorization'),
+        body: JSON.parse(options.body),
+      })
+      return deliveries.length === 1
+        ? response(401, { detail: 'Given token not valid for any token type' })
+        : response(201, { detail: 'Comprobante procesado.' })
+    }
+
+    const result = await authenticatedFetch('/api/orders/1/reception-receipt/deliver/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delivery_method: method }),
+    })
+
+    assert.equal(result.status, 201)
+    assert.deepEqual(deliveries, [
+      { authorization: 'Bearer vigente-al-verificar', body: { delivery_method: method } },
+      { authorization: 'Bearer renovado', body: { delivery_method: method } },
+    ])
+  })
+}
+
+for (const { label, url, body } of [
+  { label: 'cliente', url: '/api/clients/', body: { name: 'Ana', phone: '+56912345678' } },
+  { label: 'equipo', url: '/api/devices/', body: { client: 1, brand: 'Samsung', model: 'A14' } },
+  { label: 'orden', url: '/api/orders/', body: { client: 1, equipment: 2, reported_issue: 'Carga' } },
+]) {
+  test(`renueva la sesión si se tarda en registrar ${label}`, async () => {
+    sessionStorage.setItem(ACCESS_KEY, 'anterior')
+    sessionStorage.setItem(REFRESH_KEY, 'renovable')
+    const requests = []
+    globalThis.fetch = async (requestUrl, options) => {
+      if (requestUrl === '/api/auth/me/') return response(200, { id: 1, role: 'ADMIN' })
+      if (requestUrl === '/api/auth/refresh/') return response(200, { access: 'nuevo' })
+      requests.push({ url: requestUrl, token: options.headers.get('Authorization'), body: JSON.parse(options.body) })
+      return response(requests.length === 1 ? 401 : 201, {})
+    }
+
+    const result = await authenticatedFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    assert.equal(result.status, 201)
+    assert.deepEqual(requests, [
+      { url, token: 'Bearer anterior', body },
+      { url, token: 'Bearer nuevo', body },
+    ])
+  })
+}
+
+test('dos operaciones vencidas comparten una renovación y conservan sus datos', async () => {
+  sessionStorage.setItem(ACCESS_KEY, 'anterior')
+  sessionStorage.setItem(REFRESH_KEY, 'renovable')
+  const refresh = deferred()
+  const calls = []
+  globalThis.fetch = (url, options) => {
+    if (url === '/api/auth/me/') return Promise.resolve(response(200, { id: 1, role: 'ADMIN' }))
+    if (url === '/api/auth/refresh/') {
+      calls.push('refresh')
+      return refresh.promise
+    }
+    calls.push({ url, authorization: options.headers.get('Authorization') })
+    return Promise.resolve(response(options.headers.get('Authorization') === 'Bearer anterior' ? 401 : 201, {}))
+  }
+
+  const pending = Promise.all([
+    authenticatedFetch('/api/orders/1/reception-receipt/deliver/', { method: 'POST' }),
+    authenticatedFetch('/api/orders/2/reception-receipt/deliver/', { method: 'POST' }),
+  ])
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(calls.filter((call) => call === 'refresh').length, 1)
+  refresh.resolve(response(200, { access: 'nuevo' }))
+
+  const results = await pending
+  assert.deepEqual(results.map(({ status }) => status), [201, 201])
+  assert.equal(calls.filter((call) => call === 'refresh').length, 1)
+  assert.equal(calls.filter((call) => call.authorization === 'Bearer nuevo').length, 2)
+})
+
+test('un refresh vencido muestra un mensaje claro sin repetir el envío', async () => {
+  sessionStorage.setItem(ACCESS_KEY, 'anterior')
+  sessionStorage.setItem(REFRESH_KEY, 'vencido')
+  let deliveries = 0
+  globalThis.fetch = async (url) => {
+    if (url === '/api/auth/me/') return response(200, { id: 1, role: 'ADMIN' })
+    if (url === '/api/auth/refresh/') return response(401, { detail: 'Token is invalid or expired' })
+    deliveries += 1
+    return response(401, { detail: 'Given token not valid for any token type' })
+  }
+
+  await assert.rejects(
+    authenticatedFetch('/api/orders/1/reception-receipt/deliver/', { method: 'POST' }),
+    /Tu sesión ha expirado. Vuelve a iniciar sesión./,
+  )
+  assert.equal(deliveries, 1)
+  assert.equal(sessionStorage.getItem(ACCESS_KEY), null)
+  assert.equal(getCurrentUser(), null)
+})
+
+test('una falla del proveedor de correo no reenvía la operación', async () => {
+  sessionStorage.setItem(ACCESS_KEY, 'vigente')
+  let deliveries = 0
+  globalThis.fetch = async (url) => {
+    if (url === '/api/auth/me/') return response(200, { id: 1, role: 'ADMIN' })
+    deliveries += 1
+    return response(502, { detail: 'No fue posible enviar el correo.' })
+  }
+
+  const result = await authenticatedFetch('/api/orders/1/reception-receipt/deliver/', {
+    method: 'POST',
+    body: JSON.stringify({ delivery_method: 'EMAIL' }),
+  })
+  assert.equal(result.status, 502)
+  assert.equal(deliveries, 1)
+})
+
+test('un cierre de sesión durante la renovación no recupera los tokens', async () => {
+  sessionStorage.setItem(ACCESS_KEY, 'anterior')
+  sessionStorage.setItem(REFRESH_KEY, 'renovable')
+  const refresh = deferred()
+  let deliveries = 0
+  globalThis.fetch = (url) => {
+    if (url === '/api/auth/me/') return Promise.resolve(response(200, { id: 1, role: 'ADMIN' }))
+    if (url === '/api/auth/refresh/') return refresh.promise
+    deliveries += 1
+    return Promise.resolve(response(401, {}))
+  }
+
+  const pending = authenticatedFetch('/api/orders/1/reception-receipt/deliver/', { method: 'POST' })
+  await new Promise((resolve) => setImmediate(resolve))
+  closeSession()
+  refresh.resolve(response(200, { access: 'no-debe-restaurarse' }))
+
+  await assert.rejects(pending, /sesión ha expirado/)
+  assert.equal(deliveries, 1)
+  assert.equal(sessionStorage.getItem(ACCESS_KEY), null)
+})
