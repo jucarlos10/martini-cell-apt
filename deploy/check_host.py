@@ -44,6 +44,14 @@ def check_host():
         errors.append("DJANGO_PRIVATE_MEDIA_ROOT debe ser una ruta absoluta.")
     else:
         media_root = media_root.resolve()
+        if os.getenv("RAILWAY_SERVICE_ID"):
+            volume_path = os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
+            if not volume_path:
+                errors.append("Railway necesita un volumen persistente para las fotos privadas.")
+            elif not Path(volume_path).is_absolute() or not media_root.is_relative_to(
+                Path(volume_path).resolve()
+            ):
+                errors.append("DJANGO_PRIVATE_MEDIA_ROOT debe estar dentro del volumen de Railway.")
         public_roots = [
             Path(settings.STATIC_ROOT).resolve(),
             (ROOT / "frontend" / "dist").resolve(),
