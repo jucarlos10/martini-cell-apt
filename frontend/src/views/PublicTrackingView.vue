@@ -680,49 +680,44 @@ onBeforeUnmount(() => {
 
 <template>
   <main
-    class="min-vh-100 py-4 px-3"
-    style="background: #eef4f8"
+    class="public-page min-vh-100 py-4 px-3"
   >
     <div class="mobile-public">
       <header
-        class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4"
+        class="public-header d-flex flex-wrap justify-content-between align-items-center gap-2 mb-4"
       >
-        <div
-          class="fw-bold fs-5"
-          style="color: var(--mc-navy)"
-        >
-          <i
-            class="bi bi-tools me-2"
-            aria-hidden="true"
-          ></i>
-          MARTINI CELL
+        <div class="public-brand">
+          <span class="public-brand-mark" aria-hidden="true"><i class="bi bi-tools"></i></span>
+          <span>MARTINI CELL</span>
         </div>
 
         <router-link
           to="/login"
-          class="small"
+          class="public-login-link"
         >
+          <i class="bi bi-person-circle" aria-hidden="true"></i>
           Iniciar sesión
         </router-link>
       </header>
 
       <section
-        class="mc-card p-4 mb-3"
+        class="mc-card public-search-card p-4 mb-3"
         aria-labelledby="tracking-heading"
       >
+        <p class="public-kicker mb-2">SEGUIMIENTO DE TU EQUIPO</p>
         <h1
           id="tracking-heading"
-          class="h4 fw-bold"
+          class="public-heading"
         >
           Consulta tu reparación
         </h1>
 
-        <p class="text-muted">
-          Ingresa el código de seguimiento entregado al recibir tu equipo.
+        <p class="public-lead">
+          Revisa en qué etapa está tu equipo y conversa con el taller desde un mismo lugar.
         </p>
 
         <form
-          class="row g-2 align-items-end"
+          class="row g-2 align-items-end public-search-form"
           @submit.prevent="search"
         >
           <div class="col-12 col-sm-8">
@@ -741,6 +736,8 @@ onBeforeUnmount(() => {
               placeholder="MC-XXXXXXXXXXXX"
               autocomplete="off"
               autocapitalize="characters"
+              spellcheck="false"
+              :aria-describedby="error ? 'tracking-hint tracking-error' : 'tracking-hint'"
               :aria-invalid="Boolean(error)"
               :disabled="loading"
               required
@@ -759,13 +756,25 @@ onBeforeUnmount(() => {
                 aria-hidden="true"
               ></span>
 
+              <i
+                v-else
+                class="bi bi-search me-1"
+                aria-hidden="true"
+              ></i>
+
               {{ loading ? 'Consultando...' : 'Consultar' }}
             </button>
           </div>
         </form>
 
+        <p id="tracking-hint" class="public-input-hint mb-0 mt-2">
+          <i class="bi bi-info-circle" aria-hidden="true"></i>
+          El código comienza con MC- y está en tu comprobante de recepción.
+        </p>
+
         <div
           v-if="error"
+          id="tracking-error"
           class="alert alert-warning mt-3 mb-0"
           role="alert"
         >
@@ -773,9 +782,15 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
+      <div v-if="!data" class="public-steps" aria-label="Cómo funciona el seguimiento">
+        <div><span>1</span><p>Busca tu código</p></div>
+        <div><span>2</span><p>Revisa el avance</p></div>
+        <div><span>3</span><p>Escríbenos si lo necesitas</p></div>
+      </div>
+
       <section
         v-if="data"
-        class="mc-card p-4"
+        class="mc-card public-result-card p-4"
         aria-labelledby="tracking-result-heading"
         aria-live="polite"
       >
@@ -1107,7 +1122,8 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <p class="text-center text-muted small mt-4">
+      <p class="public-privacy-note text-center mt-4">
+        <i class="bi bi-shield-lock" aria-hidden="true"></i>
         Esta consulta pública no muestra datos personales, fotografías,
         costos internos ni diagnósticos.
       </p>
