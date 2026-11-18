@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -11,6 +13,7 @@ from .models import (
     OrderChatMessage,
     ServiceOrder,
 )
+from .public_tracking import PublicChatReadThrottle, PublicChatWriteThrottle
 
 
 class OrderChatTests(APITestCase):
@@ -302,6 +305,50 @@ class OrderChatTests(APITestCase):
                 order=self.order
             ).exists()
         )
+
+    def test_public_chat_limits_messages_per_order_across_ips(self):
+        self.client.force_authenticate(user=None)
+
+        with patch.object(PublicChatWriteThrottle, "rate", "3/hour"):
+            for remote_addr in ("198.51.100.41", "198.51.100.42", "198.51.100.43"):
+                response = self.client.post(
+                    self.public_chat_url(),
+                    {"body": "Mensaje de prueba"},
+                    format="json",
+                    REMOTE_ADDR=remote_addr,
+                )
+                self.assertIn(response.status_code, (200, 201))
+
+            response = self.client.post(
+                self.public_chat_url(),
+                {"body": "Mensaje excedente"},
+                format="json",
+                REMOTE_ADDR="198.51.100.44",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertEqual(
+            OrderChatMessage.objects.filter(conversation__order=self.order).count(),
+            3,
+        )
+        self.assertEqual(self.client.get(self.public_chat_url()).status_code, 200)
+
+    def test_public_chat_limits_reads_without_blocking_messages(self):
+        self.client.force_authenticate(user=None)
+
+        with patch.object(PublicChatReadThrottle, "rate", "3/hour"):
+            for _ in range(3):
+                response = self.client.get(
+                    self.public_chat_url(), REMOTE_ADDR="198.51.100.45"
+                )
+                self.assertEqual(response.status_code, 200)
+
+            response = self.client.get(
+                self.public_chat_url(), REMOTE_ADDR="198.51.100.45"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertEqual(self.send_public_message().status_code, 201)
 
     def test_admin_can_list_chat_inbox_with_unread_count(self):
         conversation = self.create_conversation()
