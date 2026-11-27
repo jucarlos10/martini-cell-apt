@@ -39,6 +39,7 @@ from .models import (
     OrderTechnicalReport,
     ServiceOrder,
 )
+from .public_tracking import PublicChatReadThrottle, PublicChatWriteThrottle
 from .serializers import (
     OrderChatConversationDetailSerializer,
     OrderChatConversationListSerializer,
@@ -1216,7 +1217,9 @@ class PublicOrderChatView(APIView):
     otros detalles de la orden.
     """
 
+    authentication_classes = []
     permission_classes = [AllowAny]
+    throttle_classes = [PublicChatReadThrottle, PublicChatWriteThrottle]
 
     def get(self, request, tracking_code):
         order = _get_public_order_by_tracking_code(

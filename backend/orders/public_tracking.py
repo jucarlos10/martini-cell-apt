@@ -1,10 +1,11 @@
 import re
+from hashlib import sha256
 
 from rest_framework import serializers
 from rest_framework.exceptions import NotFound
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-from rest_framework.throttling import AnonRateThrottle
+from rest_framework.throttling import AnonRateThrottle, SimpleRateThrottle
 from rest_framework.views import APIView
 
 from .models import OrderStatusHistory, ServiceOrder
@@ -13,6 +14,36 @@ from .models import OrderStatusHistory, ServiceOrder
 class PublicTrackingThrottle(AnonRateThrottle):
     scope = "public_tracking"
     rate = "20/hour"
+
+
+class PublicChatReadThrottle(SimpleRateThrottle):
+    scope = "public_chat_read"
+    # La pantalla consulta cada cinco segundos mientras el chat está abierto.
+    rate = "3600/hour"
+
+    def get_cache_key(self, request, view):
+        if request.method != "GET":
+            return None
+        return self.cache_format % {
+            "scope": self.scope,
+            "ident": self.get_ident(request),
+        }
+
+
+class PublicChatWriteThrottle(SimpleRateThrottle):
+    scope = "public_chat_write"
+    rate = "20/hour"
+
+    def get_cache_key(self, request, view):
+        if request.method != "POST":
+            return None
+        # Una conversación comparte el límite aunque lleguen envíos desde
+        # diferentes IP. No guardar el código de seguimiento en la clave.
+        code = (view.kwargs.get("tracking_code") or "").strip().upper()
+        return self.cache_format % {
+            "scope": self.scope,
+            "ident": sha256(code.encode("utf-8")).hexdigest(),
+        }
 
 
 class PublicStatusHistorySerializer(serializers.ModelSerializer):
